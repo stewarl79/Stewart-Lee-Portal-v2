@@ -17,10 +17,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Initialize Firebase Admin
-// Note: In AI Studio, we use the environment variables for Firebase
-const firebaseConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "firebase-applet-config.json"), "utf8"));
+let firebaseConfig: any;
+try {
+  const configPath = path.join(__dirname, "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } else {
+    console.warn("firebase-applet-config.json not found. Falling back to environment variables.");
+    firebaseConfig = {
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || "(default)",
+    };
+  }
+} catch (e) {
+  console.error("Failed to load firebase-applet-config.json:", e);
+  firebaseConfig = { projectId: process.env.FIREBASE_PROJECT_ID };
+}
 
-if (!admin.apps.length) {
+if (!admin.apps.length && firebaseConfig?.projectId) {
   try {
     const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
     const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
@@ -47,7 +61,7 @@ if (!admin.apps.length) {
   }
 }
 
-const db = getFirestore(firebaseConfig.firestoreDatabaseId);
+const db = getFirestore(firebaseConfig?.firestoreDatabaseId || "(default)");
 const auth = getAuth();
 
 async function startServer() {

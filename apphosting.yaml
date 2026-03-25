@@ -1,0 +1,25 @@
+# Configuration for Firebase App Hosting
+# This file defines the environment variables needed for the production build.
+# You must also set these secrets in the Firebase Console under App Hosting > Settings.
+
+env:
+  - variable: GOOGLE_CLIENT_EMAIL
+    secret: GOOGLE_CLIENT_EMAIL
+  - variable: GOOGLE_PRIVATE_KEY
+    secret: GOOGLE_PRIVATE_KEY
+  - variable: SMTP_HOST
+    secret: SMTP_HOST
+  - variable: SMTP_PORT
+    secret: SMTP_PORT
+  - variable: SMTP_SECURE
+    secret: SMTP_SECURE
+  - variable: SMTP_USER
+    secret: SMTP_USER
+  - variable: SMTP_PASS
+    secret: SMTP_PASS
+  - variable: APP_URL
+    value: https://portal.mrleeteaches.com
+  - variable: FIREBASE_PROJECT_ID
+    value: gen-lang-client-0039191895
+  - variable: FIREBASE_DATABASE_ID
+    value: (default)
