@@ -21,7 +21,10 @@ import {
   Menu,
   X,
   UserPlus,
-  RefreshCw
+  RefreshCw,
+  Share2,
+  Library,
+  MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -103,6 +106,7 @@ interface UserProfile {
   photoURL?: string;
   phone?: string;
   role: Role;
+  isActive?: boolean;
   createdAt: any;
   mustChangePassword?: boolean;
   reminderTemplate?: string;
@@ -133,6 +137,17 @@ interface SharedDocument {
   createdAt: Timestamp;
 }
 
+interface Message {
+  id: string;
+  senderUid: string;
+  receiverUid: string;
+  content: string;
+  createdAt: Timestamp;
+  isRead: boolean;
+  type: 'text' | 'system';
+  metadata?: any;
+}
+
 const isCalendarId = (email: string) => {
   return email.includes('calendar.google.com');
 };
@@ -152,24 +167,36 @@ const SidebarItem = ({
   icon: Icon, 
   label, 
   active, 
-  onClick 
+  onClick,
+  badge
 }: { 
   icon: any; 
   label: string; 
   active: boolean; 
   onClick: () => void;
+  badge?: number;
 }) => (
   <button
     onClick={onClick}
     className={cn(
-      "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group",
+      "w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group",
       active 
         ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" 
         : "text-slate-400 hover:bg-slate-800 hover:text-white"
     )}
   >
-    <Icon className={cn("w-5 h-5", active ? "text-white" : "group-hover:text-emerald-400")} />
-    <span className="font-medium">{label}</span>
+    <div className="flex items-center gap-3">
+      <Icon className={cn("w-5 h-5", active ? "text-white" : "group-hover:text-emerald-400")} />
+      <span className="font-medium">{label}</span>
+    </div>
+    {badge !== undefined && badge > 0 && (
+      <span className={cn(
+        "px-2 py-0.5 text-[10px] font-bold rounded-full",
+        active ? "bg-white text-emerald-600" : "bg-emerald-500 text-white"
+      )}>
+        {badge}
+      </span>
+    )}
   </button>
 );
 
@@ -200,6 +227,224 @@ const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; v
   );
 };
 
+// --- Messaging Component ---
+const MessagingView = ({ 
+  user, 
+  profile, 
+  clients, 
+  messages, 
+  coachProfile,
+  onSendMessage,
+  onMarkAsRead,
+  selectedClient,
+  setSelectedClient
+}: { 
+  user: User; 
+  profile: UserProfile; 
+  clients: UserProfile[]; 
+  messages: Message[]; 
+  coachProfile: UserProfile | null;
+  onSendMessage: (receiverUid: string, content: string) => void;
+  onMarkAsRead: (messageId: string) => void;
+  selectedClient: string | null;
+  setSelectedClient: (uid: string | null) => void;
+}) => {
+  const [newMessage, setNewMessage] = useState('');
+  const [showInactiveInChat, setShowInactiveInChat] = useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  const coach = coachProfile || { uid: 'coach', displayName: 'Stewart Lee', email: 'msustewart@gmail.com' };
+
+  const activeClients = clients.filter(c => c.isActive !== false);
+  const inactiveClients = clients.filter(c => c.isActive === false);
+  const visibleClients = showInactiveInChat ? clients : activeClients;
+
+  const chatPartner = profile?.role === 'coach' 
+    ? clients.find(c => c.uid === selectedClient)
+    : coach;
+
+  const filteredMessages = useMemo(() => {
+    if (profile?.role === 'client') {
+      return messages.filter(m => 
+        (m.senderUid === user.uid && m.receiverUid !== user.uid) || 
+        (m.receiverUid === user.uid)
+      ).sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
+    }
+    if (!selectedClient) return [];
+    return messages.filter(m => 
+      (m.senderUid === user.uid && m.receiverUid === selectedClient) || 
+      (m.senderUid === selectedClient && m.receiverUid === user.uid)
+    ).sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
+  }, [messages, selectedClient, user.uid, profile?.role]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+    // Mark unread messages as read
+    filteredMessages.forEach(m => {
+      if (m.receiverUid === user.uid && !m.isRead) {
+        onMarkAsRead(m.id);
+      }
+    });
+  }, [filteredMessages, user.uid, onMarkAsRead]);
+
+  const handleSend = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim()) return;
+    const receiverUid = profile?.role === 'coach' ? selectedClient : coach.uid;
+    if (!receiverUid) return;
+    onSendMessage(receiverUid, newMessage);
+    setNewMessage('');
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-12rem)] min-h-[600px]">
+      {profile?.role === 'coach' && (
+        <Card title="Clients" className="lg:col-span-1 flex flex-col h-full">
+          {inactiveClients.length > 0 && (
+            <div className="px-4 pb-2 border-b border-slate-800 mb-2">
+              <button 
+                onClick={() => setShowInactiveInChat(!showInactiveInChat)}
+                className="text-[10px] uppercase tracking-wider font-bold text-slate-500 hover:text-emerald-500 transition-colors flex items-center gap-1"
+              >
+                {showInactiveInChat ? 'Hide Inactive' : `Show Inactive (${inactiveClients.length})`}
+              </button>
+            </div>
+          )}
+          <div className="space-y-2 overflow-y-auto flex-1 pr-2 scrollbar-thin scrollbar-thumb-slate-800">
+            {visibleClients.length === 0 ? (
+              <div className="text-center py-8 text-slate-500 text-sm">
+                No {showInactiveInChat ? '' : 'active'} clients found.
+              </div>
+            ) : (
+              visibleClients.map(client => {
+                const unreadCount = messages.filter(m => m.senderUid === client.uid && m.receiverUid === user.uid && !m.isRead).length;
+                return (
+                  <button
+                    key={client.uid}
+                    onClick={() => setSelectedClient(client.uid)}
+                    className={cn(
+                      "w-full flex items-center justify-between p-3 rounded-xl transition-all border",
+                      selectedClient === client.uid 
+                        ? "bg-emerald-600/10 border-emerald-500/50 text-white" 
+                        : "bg-slate-800/30 border-slate-700/30 text-slate-400 hover:bg-slate-800/50"
+                    )}
+                  >
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 font-bold shrink-0">
+                        {client.displayName[0]}
+                      </div>
+                      <span className="text-sm font-medium truncate">{client.displayName}</span>
+                    </div>
+                    {unreadCount > 0 && (
+                      <span className="bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </Card>
+      )}
+
+      <Card 
+        title={chatPartner ? `Chat with ${chatPartner.displayName}` : "Select a client to start messaging"} 
+        className={cn("flex flex-col h-full", profile?.role === 'coach' ? "lg:col-span-3" : "lg:col-span-4")}
+      >
+        {!chatPartner && profile?.role === 'coach' ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-600 min-h-[300px]">
+            <MessageSquare className="w-16 h-16 mb-4 opacity-20" />
+            <p className="text-center px-4">Select a client from the list to start a conversation.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col h-full">
+            <div 
+              ref={scrollRef}
+              className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 scrollbar-thin scrollbar-thumb-slate-700"
+            >
+              {filteredMessages.length === 0 ? (
+                <div className="text-center py-12 text-slate-600 italic text-sm">
+                  No messages yet. Send a message to start the conversation!
+                </div>
+              ) : (
+                filteredMessages.map((msg) => {
+                  const isMe = msg.senderUid === user.uid;
+                  return (
+                    <div 
+                      key={msg.id} 
+                      className={cn(
+                        "flex flex-col",
+                        isMe ? "items-end" : "items-start"
+                      )}
+                    >
+                      <div className={cn(
+                        "max-w-[80%] p-4 rounded-2xl text-sm shadow-sm",
+                        isMe 
+                          ? "bg-emerald-600 text-white rounded-tr-none" 
+                          : "bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700"
+                      )}>
+                        {msg.type === 'system' && (
+                          <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/10 text-[10px] font-bold uppercase tracking-wider opacity-80">
+                            <AlertCircle className="w-3 h-3" /> System Notification
+                          </div>
+                        )}
+                        <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                        {msg.metadata?.documentUrl && (
+                          <a 
+                            href={msg.metadata.documentUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className={cn(
+                              "mt-3 flex items-center gap-2 p-2 rounded-lg text-xs font-medium transition-all",
+                              isMe ? "bg-white/10 hover:bg-white/20" : "bg-slate-900/50 hover:bg-slate-900"
+                            )}
+                          >
+                            <FileText className="w-4 h-4" />
+                            <span className="truncate">{msg.metadata.documentName}</span>
+                            <ExternalLink className="w-3 h-3 ml-auto" />
+                          </a>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-1 px-1">
+                        {format(msg.createdAt?.toDate() || new Date(), 'h:mm a')}
+                        {isMe && (
+                          <span className="ml-2">
+                            {msg.isRead ? 'Read' : 'Sent'}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <form onSubmit={handleSend} className="flex gap-2 pt-4 border-t border-slate-800">
+              <input 
+                type="text" 
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder="Type your message..."
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <button 
+                type="submit"
+                disabled={!newMessage.trim()}
+                className="bg-emerald-600 text-white p-3 rounded-xl hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-600/20 disabled:opacity-50"
+              >
+                <Plus className="w-6 h-6 rotate-45" />
+              </button>
+            </form>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -210,6 +455,52 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showLateNoticeModal, setShowLateNoticeModal] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  );
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then(reg => console.log('Service Worker registered', reg))
+        .catch(err => console.error('Service Worker registration failed', err));
+    }
+  }, []);
+
+  useEffect(() => {
+    // Check permission status periodically or on focus
+    const checkPermission = () => {
+      if (typeof Notification !== 'undefined') {
+        setNotificationPermission(Notification.permission);
+      }
+    };
+    
+    window.addEventListener('focus', checkPermission);
+    return () => window.removeEventListener('focus', checkPermission);
+  }, []);
+
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      alert('This browser does not support desktop notification');
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      
+      if (permission === 'granted') {
+        new Notification('Notifications Enabled', {
+          body: 'You will now receive updates for appointments, documents, and messages.',
+          icon: '/logo.png'
+        });
+      } else if (permission === 'denied') {
+        console.warn('Notification permission denied');
+      }
+    } catch (error) {
+      console.error('Error requesting notification permission:', error);
+    }
+  };
   const [showActionModal, setShowActionModal] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [selectedClient, setSelectedClient] = useState<any>(null);
@@ -237,6 +528,9 @@ export default function App() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [clients, setClients] = useState<UserProfile[]>([]);
   const [documents, setDocuments] = useState<SharedDocument[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [selectedChatClient, setSelectedChatClient] = useState<string | null>(null);
+  const [coachProfile, setCoachProfile] = useState<UserProfile | null>(null);
 
   useEffect(() => {
     let unsubProfile: (() => void) | null = null;
@@ -280,6 +574,20 @@ export default function App() {
     };
   }, []);
 
+  // Fetch coach profile for clients
+  useEffect(() => {
+    if (!user || !profile || profile.role === 'coach') return;
+
+    const coachQuery = query(collection(db, 'users'), where('email', '==', 'msustewart@gmail.com'), limit(1));
+    const unsubCoach = onSnapshot(coachQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        setCoachProfile(snapshot.docs[0].data() as UserProfile);
+      }
+    });
+
+    return () => unsubCoach();
+  }, [user, profile]);
+
   // Real-time listeners
   useEffect(() => {
     if (!user || !profile) return;
@@ -305,6 +613,36 @@ export default function App() {
       setDocuments(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as SharedDocument)));
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'documents'));
 
+    const messagesQuery = query(
+      collection(db, 'messages'),
+      where(profile.role === 'coach' ? 'senderUid' : 'receiverUid', '==', user.uid),
+      orderBy('createdAt', 'desc')
+    );
+
+    // We need two queries for messages to get both sent and received
+    const sentMessagesQuery = query(collection(db, 'messages'), where('senderUid', '==', user.uid));
+    const receivedMessagesQuery = query(collection(db, 'messages'), where('receiverUid', '==', user.uid));
+
+    const unsubSent = onSnapshot(sentMessagesQuery, (snapshot) => {
+      const sent = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message));
+      setMessages(prev => {
+        const other = prev.filter(m => m.senderUid !== user.uid);
+        const combined = [...other, ...sent];
+        const unique = Array.from(new Map(combined.map(m => [m.id, m])).values());
+        return unique.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
+      });
+    });
+
+    const unsubReceived = onSnapshot(receivedMessagesQuery, (snapshot) => {
+      const received = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message));
+      setMessages(prev => {
+        const other = prev.filter(m => m.receiverUid !== user.uid);
+        const combined = [...other, ...received];
+        const unique = Array.from(new Map(combined.map(m => [m.id, m])).values());
+        return unique.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
+      });
+    });
+
     if (profile.role === 'coach') {
       // Listen to ALL users who are clients
       console.log("Coach detected, starting clients listener...");
@@ -316,10 +654,10 @@ export default function App() {
         console.error("Clients listener error:", err);
         handleFirestoreError(err, OperationType.LIST, 'users');
       });
-      return () => { unsubAppts(); unsubDocs(); unsubClients(); };
+      return () => { unsubAppts(); unsubDocs(); unsubClients(); unsubSent(); unsubReceived(); };
     }
 
-    return () => { unsubAppts(); unsubDocs(); };
+    return () => { unsubAppts(); unsubDocs(); unsubSent(); unsubReceived(); };
   }, [user, profile]);
 
   const handleGoogleLogin = async () => {
@@ -388,7 +726,7 @@ export default function App() {
     }
   };
 
-  if (loading) {
+  if (loading || (user && !profile)) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -615,6 +953,32 @@ export default function App() {
     }
   };
 
+  const handleSendMessage = async (receiverUid: string, content: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'messages'), {
+        senderUid: user.uid,
+        receiverUid,
+        content,
+        createdAt: serverTimestamp(),
+        isRead: false,
+        type: 'text'
+      });
+    } catch (err) {
+      console.error('Failed to send message', err);
+    }
+  };
+
+  const handleMarkAsRead = async (messageId: string) => {
+    try {
+      await updateDoc(doc(db, 'messages', messageId), {
+        isRead: true
+      });
+    } catch (err) {
+      console.error('Failed to mark message as read', err);
+    }
+  };
+
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': return (
@@ -622,6 +986,7 @@ export default function App() {
           appointments={appointments} 
           clients={clients} 
           documents={documents} 
+          messages={messages}
           profile={profile} 
           setActiveTab={setActiveTab} 
           onRequestSession={() => setShowRequestModal(true)}
@@ -630,6 +995,8 @@ export default function App() {
             setSelectedClient(client);
             setActiveTab('clients');
           }}
+          notificationPermission={notificationPermission}
+          onRequestNotifications={requestNotificationPermission}
         />
       );
       case 'calendar': return (
@@ -649,9 +1016,37 @@ export default function App() {
           setSelectedClient={setSelectedClient}
         />
       );
+      case 'messages': return (
+        <MessagingView
+          user={user}
+          messages={messages}
+          clients={clients}
+          profile={profile}
+          coachProfile={coachProfile}
+          onSendMessage={handleSendMessage}
+          onMarkAsRead={handleMarkAsRead}
+          selectedClient={selectedChatClient}
+          setSelectedClient={setSelectedChatClient}
+        />
+      );
+      case 'library': return <LibraryView clients={clients} user={user} />;
       case 'documents': return <DocumentsView documents={documents} role={profile?.role} user={user} />;
-      case 'reminders': return <RemindersView appointments={appointments} role={profile?.role} />;
-      case 'settings': return <SettingsView profile={profile} role={profile?.role} />;
+      case 'reminders': return (
+        <RemindersView 
+          appointments={appointments} 
+          role={profile?.role} 
+          notificationPermission={notificationPermission}
+          onRequestNotifications={requestNotificationPermission}
+        />
+      );
+      case 'settings': return (
+        <SettingsView 
+          profile={profile} 
+          role={profile?.role} 
+          notificationPermission={notificationPermission}
+          onRequestNotifications={requestNotificationPermission}
+        />
+      );
       default: return null;
     }
   };
@@ -660,7 +1055,10 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-200 flex">
       {/* Sidebar - Desktop */}
       <aside className="hidden lg:flex flex-col w-72 bg-slate-900 border-r border-slate-800 p-6">
-        <div className="flex items-center gap-3 mb-10 px-2">
+        <button 
+          onClick={() => setActiveTab('dashboard')}
+          className="flex items-center gap-3 mb-10 px-2 hover:opacity-80 transition-opacity text-left"
+        >
           <div className="w-10 h-10">
             <img 
               src="/logo.png" 
@@ -675,14 +1073,24 @@ export default function App() {
             <h1 className="text-xl font-bold text-white tracking-tight">MrLeeTeaches</h1>
             <p className="text-emerald-500 text-[10px] font-bold uppercase tracking-wider -mt-1">Neurodiversity Coaching</p>
           </div>
-        </div>
+        </button>
 
         <nav className="flex-1 space-y-2">
           <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
           <SidebarItem icon={Calendar} label="Calendar" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
           {profile?.role === 'coach' && (
-            <SidebarItem icon={Users} label="Clients" active={activeTab === 'clients'} onClick={() => setActiveTab('clients')} />
+            <>
+              <SidebarItem icon={Users} label="Clients" active={activeTab === 'clients'} onClick={() => setActiveTab('clients')} />
+              <SidebarItem icon={Library} label="Library" active={activeTab === 'library'} onClick={() => setActiveTab('library')} />
+            </>
           )}
+          <SidebarItem 
+            icon={MessageSquare} 
+            label="Messages" 
+            active={activeTab === 'messages'} 
+            onClick={() => setActiveTab('messages')} 
+            badge={messages.filter(m => m.receiverUid === user?.uid && !m.isRead).length || undefined}
+          />
           <SidebarItem icon={FileText} label="Documents" active={activeTab === 'documents'} onClick={() => setActiveTab('documents')} />
           <SidebarItem icon={Bell} label="Reminders" active={activeTab === 'reminders'} onClick={() => setActiveTab('reminders')} />
           <SidebarItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
@@ -714,7 +1122,10 @@ export default function App() {
 
       {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 z-50">
-        <div className="flex items-center gap-2">
+        <button 
+          onClick={() => setActiveTab('dashboard')}
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity text-left"
+        >
           <img 
             src="/logo.png" 
             alt="Logo" 
@@ -727,7 +1138,7 @@ export default function App() {
             <span className="font-bold text-white block leading-none">MrLeeTeaches</span>
             <span className="text-emerald-500 text-[8px] font-bold uppercase tracking-wider">Neurodiversity Coaching</span>
           </div>
-        </div>
+        </button>
         <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 text-slate-400 hover:text-white">
           {sidebarOpen ? <X /> : <Menu />}
         </button>
@@ -752,7 +1163,10 @@ export default function App() {
               className="fixed inset-y-0 left-0 w-72 bg-slate-900 z-50 p-6 lg:hidden"
             >
               <div className="flex items-center justify-between mb-10">
-                <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => { setActiveTab('dashboard'); setSidebarOpen(false); }}
+                  className="flex items-center gap-3 hover:opacity-80 transition-opacity text-left"
+                >
                   <img 
                     src="/logo.png" 
                     alt="Logo" 
@@ -765,7 +1179,7 @@ export default function App() {
                     <h1 className="text-xl font-bold text-white tracking-tight">MrLeeTeaches</h1>
                     <p className="text-emerald-500 text-[10px] font-bold uppercase tracking-wider -mt-1">Neurodiversity Coaching</p>
                   </div>
-                </div>
+                </button>
                 <button onClick={() => setSidebarOpen(false)} className="p-2 text-slate-400">
                   <X />
                 </button>
@@ -774,8 +1188,18 @@ export default function App() {
                 <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setSidebarOpen(false); }} />
                 <SidebarItem icon={Calendar} label="Calendar" active={activeTab === 'calendar'} onClick={() => { setActiveTab('calendar'); setSidebarOpen(false); }} />
                 {profile?.role === 'coach' && (
-                  <SidebarItem icon={Users} label="Clients" active={activeTab === 'clients'} onClick={() => { setActiveTab('clients'); setSidebarOpen(false); }} />
+                  <>
+                    <SidebarItem icon={Users} label="Clients" active={activeTab === 'clients'} onClick={() => { setActiveTab('clients'); setSidebarOpen(false); }} />
+                    <SidebarItem icon={Library} label="Library" active={activeTab === 'library'} onClick={() => { setActiveTab('library'); setSidebarOpen(false); }} />
+                  </>
                 )}
+                <SidebarItem 
+                  icon={MessageSquare} 
+                  label="Messages" 
+                  active={activeTab === 'messages'} 
+                  onClick={() => { setActiveTab('messages'); setSidebarOpen(false); }} 
+                  badge={messages.filter(m => m.receiverUid === user?.uid && !m.isRead).length || undefined}
+                />
                 <SidebarItem icon={FileText} label="Documents" active={activeTab === 'documents'} onClick={() => { setActiveTab('documents'); setSidebarOpen(false); }} />
                 <SidebarItem icon={Bell} label="Reminders" active={activeTab === 'reminders'} onClick={() => { setActiveTab('reminders'); setSidebarOpen(false); }} />
                 <SidebarItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => { setActiveTab('settings'); setSidebarOpen(false); }} />
@@ -1042,15 +1466,33 @@ export default function App() {
 
 // --- View Components ---
 
-function DashboardView({ appointments, clients, documents, profile, setActiveTab, onRequestSession, onAction, onSelectClient }: any) {
+function DashboardView({ 
+  appointments, 
+  clients, 
+  documents, 
+  messages, 
+  profile, 
+  setActiveTab, 
+  onRequestSession, 
+  onAction, 
+  onSelectClient,
+  notificationPermission,
+  onRequestNotifications
+}: any) {
   const nextAppointment = useMemo(() => {
     return appointments.find((a: any) => isAfter(a.startTime.toDate(), new Date()) && a.status === 'scheduled');
   }, [appointments]);
 
+  const unreadCount = useMemo(() => {
+    return messages.filter((m: any) => m.receiverUid === profile?.uid && !m.isRead).length;
+  }, [messages, profile]);
+
   const stats = [
-    { label: 'Total Clients', value: clients.length, icon: Users, color: 'text-blue-400', bg: 'bg-blue-400/10' },
-    { label: 'Upcoming Sessions', value: appointments.filter((a: any) => a.status === 'scheduled' && isAfter(a.startTime.toDate(), new Date())).length, icon: Calendar, color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
-    { label: 'Shared Docs', value: documents.length, icon: FileText, color: 'text-amber-400', bg: 'bg-amber-400/10' },
+    profile?.role === 'coach' 
+      ? { label: 'Active Clients', value: clients.filter((c: any) => c.isActive !== false).length, icon: Users, color: 'text-blue-400', bg: 'bg-blue-400/10', tab: 'clients' }
+      : { label: 'Shared Documents', value: documents.length, icon: FileText, color: 'text-blue-400', bg: 'bg-blue-400/10', tab: 'documents' },
+    { label: 'Upcoming Sessions', value: appointments.filter((a: any) => a.status === 'scheduled' && isAfter(a.startTime.toDate(), new Date())).length, icon: Calendar, color: 'text-emerald-400', bg: 'bg-emerald-400/10', tab: 'calendar' },
+    { label: 'New Messages', value: unreadCount, icon: MessageSquare, color: 'text-amber-400', bg: 'bg-amber-400/10', tab: 'messaging' },
   ];
 
   return (
@@ -1073,23 +1515,24 @@ function DashboardView({ appointments, clients, documents, profile, setActiveTab
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {stats.map((stat, i) => (
-          <motion.div
+          <motion.button
             key={stat.label}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1 }}
-            className="bg-slate-900 border border-slate-800 p-6 rounded-2xl"
+            onClick={() => setActiveTab(stat.tab)}
+            className="bg-slate-900 border border-slate-800 p-6 rounded-2xl hover:border-emerald-500/50 transition-all text-left group"
           >
             <div className="flex items-center gap-4">
-              <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center", stat.bg)}>
+              <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110", stat.bg)}>
                 <stat.icon className={cn("w-6 h-6", stat.color)} />
               </div>
               <div>
-                <p className="text-sm text-slate-400 font-medium">{stat.label}</p>
+                <p className="text-sm text-slate-400 font-medium group-hover:text-emerald-400 transition-colors">{stat.label}</p>
                 <p className="text-2xl font-bold text-white">{stat.value}</p>
               </div>
             </div>
-          </motion.div>
+          </motion.button>
         ))}
       </div>
 
@@ -1208,15 +1651,20 @@ function DashboardView({ appointments, clients, documents, profile, setActiveTab
               ))
             ) : (
               documents.slice(0, 4).map((doc: any) => (
-                <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-700/30">
-                  <div className="flex items-center gap-3">
-                    <FileText className="w-5 h-5 text-amber-400" />
-                    <div>
-                      <p className="text-sm font-medium text-white truncate max-w-[150px]">{doc.name}</p>
+                <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-700/30 hover:bg-slate-800/50 transition-all group">
+                  <a 
+                    href={doc.url} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="flex items-center gap-3 flex-1 min-w-0"
+                  >
+                    <FileText className="w-5 h-5 text-amber-400 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-white truncate group-hover:text-emerald-400 transition-colors">{doc.name}</p>
                       <p className="text-xs text-slate-500">{format(doc.createdAt.toDate(), 'MMM d')}</p>
                     </div>
-                  </div>
-                  <a href={doc.url} target="_blank" rel="noopener noreferrer" className="p-2 text-slate-400 hover:text-white">
+                  </a>
+                  <a href={doc.url} target="_blank" rel="noopener noreferrer" className="p-2 text-slate-400 hover:text-white shrink-0">
                     <Download className="w-4 h-4" />
                   </a>
                 </div>
@@ -1552,11 +2000,27 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
   const [error, setError] = useState<string | null>(null);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('active');
 
-  const filteredClients = clients.filter((c: any) => 
-    c.displayName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    c.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredClients = clients.filter((c: any) => {
+    const matchesSearch = c.displayName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          c.email.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter = filter === 'all' || 
+                          (filter === 'active' && c.isActive !== false) || 
+                          (filter === 'inactive' && c.isActive === false);
+    return matchesSearch && matchesFilter;
+  });
+
+  const toggleClientStatus = async (client: any) => {
+    try {
+      await updateDoc(doc(db, 'users', client.uid), {
+        isActive: client.isActive === false ? true : false
+      });
+    } catch (err: any) {
+      console.error('Failed to toggle client status:', err);
+      setError('Failed to update client status');
+    }
+  };
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1626,15 +2090,30 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
         </button>
       </header>
 
-      <div className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-        <input 
-          type="text" 
-          placeholder="Search by name or email..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full bg-slate-900 border border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-        />
+      <div className="flex flex-col md:flex-row gap-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+          <input 
+            type="text" 
+            placeholder="Search by name or email..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
+        <div className="flex bg-slate-900 border border-slate-800 rounded-2xl p-1">
+          {(['active', 'inactive', 'all'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-6 py-3 rounded-xl text-sm font-bold transition-all ${
+                filter === f ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -1655,6 +2134,26 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                 <div className="flex-1 min-w-0">
                   <h4 className="text-lg font-bold text-white truncate">{client.displayName}</h4>
                   <p className="text-sm text-slate-500 truncate">{client.email}</p>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full ${
+                    client.isActive !== false ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-500/10 text-slate-500'
+                  }`}>
+                    {client.isActive !== false ? 'Active' : 'Inactive'}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleClientStatus(client);
+                    }}
+                    className={`w-10 h-6 rounded-full relative transition-colors ${
+                      client.isActive !== false ? 'bg-emerald-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${
+                      client.isActive !== false ? 'left-5' : 'left-1'
+                    }`} />
+                  </button>
                 </div>
               </div>
               
@@ -2014,6 +2513,266 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
   );
 }
 
+function LibraryView({ clients, user }: { clients: UserProfile[], user: User }) {
+  const [files, setFiles] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sharingFile, setSharingFile] = useState<any>(null);
+  const [selectedClient, setSelectedClient] = useState<string>('');
+  const [isSharing, setIsSharing] = useState(false);
+  const [driveConnected, setDriveConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    checkDriveStatus();
+  }, []);
+
+  const checkDriveStatus = async () => {
+    try {
+      const res = await fetch('/api/drive/status');
+      const data = await res.json();
+      setDriveConnected(data.connected);
+      if (data.connected) {
+        fetchLibrary();
+      } else {
+        setLoading(false);
+      }
+    } catch (err) {
+      setDriveConnected(false);
+      setLoading(false);
+    }
+  };
+
+  const fetchLibrary = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/drive/library');
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to fetch library');
+      }
+      const data = await res.json();
+      setFiles(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConnectDrive = async () => {
+    try {
+      const res = await fetch('/api/auth/google/url');
+      const { url } = await res.json();
+      window.open(url, 'google_auth', 'width=600,height=700');
+      
+      // Poll for connection status
+      const interval = setInterval(async () => {
+        const statusRes = await fetch('/api/drive/status');
+        const statusData = await statusRes.json();
+        if (statusData.connected) {
+          clearInterval(interval);
+          setDriveConnected(true);
+          fetchLibrary();
+        }
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to get auth URL', err);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!selectedClient || !sharingFile) return;
+    setIsSharing(true);
+    const client = clients.find(c => c.uid === selectedClient);
+    try {
+      const res = await fetch('/api/drive/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileId: sharingFile.id,
+          fileName: sharingFile.name,
+          clientUid: client?.uid,
+          clientName: client?.displayName,
+          clientEmail: client?.email,
+          coachUid: user?.uid
+        })
+      });
+      if (!res.ok) throw new Error('Failed to share file');
+      setSharingFile(null);
+      setSelectedClient('');
+      alert('File shared successfully!');
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const handleDisconnectDrive = async () => {
+    try {
+      const res = await fetch('/api/drive/disconnect', { method: 'POST' });
+      if (res.ok) {
+        setDriveConnected(false);
+        setFiles([]);
+      }
+    } catch (err) {
+      console.error('Failed to disconnect Drive', err);
+    }
+  };
+
+  if (driveConnected === false) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-20 h-20 bg-slate-800 rounded-3xl flex items-center justify-center text-slate-500 mb-6">
+          <Library className="w-10 h-10" />
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-2">Connect Google Drive</h2>
+        <p className="text-slate-400 max-w-md mb-8">
+          Connect your Google account to browse your resource library and share documents directly with clients.
+        </p>
+        <button 
+          onClick={handleConnectDrive}
+          className="bg-emerald-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2"
+        >
+          <ExternalLink className="w-5 h-5" /> Connect Now
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <header className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Resource Library</h2>
+          <p className="text-slate-400 mt-1">Browse and share documents from your Google Drive library.</p>
+        </div>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={fetchLibrary}
+            className="p-2 text-slate-400 hover:text-white transition-colors"
+            title="Refresh Library"
+          >
+            <RefreshCw className={cn("w-5 h-5", loading && "animate-spin")} />
+          </button>
+          <button 
+            onClick={handleDisconnectDrive}
+            className="p-2 text-slate-400 hover:text-rose-500 transition-colors"
+            title="Disconnect Google Drive"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[1, 2, 3, 4, 5, 6].map(i => (
+            <div key={i} className="h-40 bg-slate-900 border border-slate-800 rounded-2xl animate-pulse" />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="p-8 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-center">
+          {error}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {files.map((file: any) => (
+            <div key={file.id} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl group hover:border-emerald-500/50 transition-all">
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center">
+                  <img src={file.iconLink} alt="" className="w-6 h-6" referrerPolicy="no-referrer" />
+                </div>
+                <div className="flex gap-2">
+                  <a 
+                    href={file.webViewLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="p-2 text-slate-500 hover:text-white transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                </div>
+              </div>
+              <h4 className="text-white font-bold mb-6 line-clamp-2 h-12">{file.name}</h4>
+              <button 
+                onClick={() => setSharingFile(file)}
+                className="w-full py-3 bg-emerald-600/10 text-emerald-500 rounded-xl font-bold hover:bg-emerald-600 hover:text-white transition-all flex items-center justify-center gap-2"
+              >
+                <Share2 className="w-4 h-4" /> Share with Client
+              </button>
+            </div>
+          ))}
+          {files.length === 0 && (
+            <div className="col-span-full text-center py-20 bg-slate-900/50 rounded-3xl border border-dashed border-slate-800">
+              <Library className="w-16 h-16 text-slate-800 mx-auto mb-4" />
+              <p className="text-slate-600">No files found in your library folder.</p>
+              <p className="text-slate-700 text-sm mt-2">Make sure you've set the correct GOOGLE_DRIVE_LIBRARY_FOLDER_ID.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Share Modal */}
+      <AnimatePresence>
+        {sharingFile && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isSharing && setSharingFile(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <h3 className="text-xl font-bold text-white mb-2">Share Resource</h3>
+              <p className="text-slate-400 mb-6">Select a client to share <span className="text-white font-bold">"{sharingFile.name}"</span> with.</p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">Select Client</label>
+                  <select 
+                    value={selectedClient}
+                    onChange={(e) => setSelectedClient(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">Choose a client...</option>
+                    {clients.map(c => (
+                      <option key={c.uid} value={c.uid}>{c.displayName}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    disabled={isSharing}
+                    onClick={() => setSharingFile(null)}
+                    className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    disabled={isSharing || !selectedClient}
+                    onClick={handleShare}
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-500 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isSharing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                    {isSharing ? "Sharing..." : "Share Copy"}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function DocumentsView({ documents, role, user }: any) {
   const [uploading, setUploading] = useState(false);
   const [selectedClient, setSelectedClient] = useState('');
@@ -2150,7 +2909,7 @@ function DocumentsView({ documents, role, user }: any) {
   );
 }
 
-function RemindersView({ appointments, role }: any) {
+function RemindersView({ appointments, role, notificationPermission, onRequestNotifications }: any) {
   const upcomingReminders = useMemo(() => {
     return appointments
       .filter((a: any) => a.status === 'scheduled' && isAfter(a.startTime.toDate(), new Date()))
@@ -2163,6 +2922,50 @@ function RemindersView({ appointments, role }: any) {
         <h2 className="text-2xl font-bold text-white">Automated Reminders</h2>
         <p className="text-slate-400 mt-1">Track and manage automated email notifications for your sessions.</p>
       </header>
+
+      {notificationPermission !== 'granted' && (
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className={cn(
+            "p-6 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-6 border",
+            notificationPermission === 'denied' 
+              ? "bg-rose-500/5 border-rose-500/20" 
+              : "bg-emerald-600/10 border-emerald-500/20"
+          )}
+        >
+          <div className="flex items-center gap-4">
+            <div className={cn(
+              "w-12 h-12 rounded-xl flex items-center justify-center",
+              notificationPermission === 'denied' ? "bg-rose-500/20 text-rose-500" : "bg-emerald-500/20 text-emerald-500"
+            )}>
+              <Bell className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-lg font-bold text-white">
+                {notificationPermission === 'denied' ? 'Notifications Blocked' : 'Enable Notifications'}
+              </h4>
+              <p className="text-slate-400 text-sm">
+                {notificationPermission === 'denied' 
+                  ? 'Your browser is blocking notifications. Please enable them in your browser settings to receive alerts.' 
+                  : 'Stay updated with real-time alerts for sessions, documents, and messages.'}
+              </p>
+            </div>
+          </div>
+          {notificationPermission === 'default' ? (
+            <button 
+              onClick={onRequestNotifications}
+              className="whitespace-nowrap bg-emerald-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-600/20"
+            >
+              Allow Notifications
+            </button>
+          ) : (
+            <div className="text-xs text-rose-400 font-medium flex items-center gap-2 bg-rose-500/10 px-4 py-2 rounded-lg border border-rose-500/20">
+              <AlertCircle className="w-4 h-4" /> Action Required in Browser Settings
+            </div>
+          )}
+        </motion.div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
@@ -2227,24 +3030,26 @@ function RemindersView({ appointments, role }: any) {
             </div>
           </Card>
 
-          <div className="bg-amber-900/10 border border-amber-900/30 p-6 rounded-2xl">
-            <div className="flex gap-3">
-              <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
-              <div>
-                <h5 className="text-sm font-bold text-amber-500 mb-1">External Clients</h5>
-                <p className="text-xs text-amber-500/70 leading-relaxed">
-                  Reminders are sent to all emails found in synced calendar events, even if they haven't registered for the portal yet.
-                </p>
+          {role === 'coach' && (
+            <div className="bg-amber-900/10 border border-amber-900/30 p-6 rounded-2xl">
+              <div className="flex gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+                <div>
+                  <h5 className="text-sm font-bold text-amber-500 mb-1">External Clients</h5>
+                  <p className="text-xs text-amber-500/70 leading-relaxed">
+                    Reminders are sent to all emails found in synced calendar events, even if they haven't registered for the portal yet.
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function SettingsView({ profile, role }: any) {
+function SettingsView({ profile, role, notificationPermission, onRequestNotifications }: any) {
   const [emailTemplate, setEmailTemplate] = useState(profile?.reminderTemplate || 'Hi, your session "{title}" is in {time}.');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -2380,6 +3185,82 @@ function SettingsView({ profile, role }: any) {
               </div>
             </Card>
           )}
+
+          <Card title="Notifications" subtitle="Manage how you receive updates">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 bg-slate-800/30 rounded-2xl border border-slate-700/30">
+                <div className="flex items-center gap-4">
+                  <div className={cn(
+                    "w-10 h-10 rounded-xl flex items-center justify-center",
+                    notificationPermission === 'granted' ? "bg-emerald-500/10 text-emerald-500" : 
+                    notificationPermission === 'denied' ? "bg-rose-500/10 text-rose-500" : "bg-slate-500/10 text-slate-500"
+                  )}>
+                    <Bell className="w-5 h-5" />
+                  </div>
+                  <div 
+                    className={cn(
+                      "cursor-pointer group",
+                      notificationPermission === 'default' && "hover:opacity-80"
+                    )}
+                    onClick={() => {
+                      if (notificationPermission === 'default') {
+                        onRequestNotifications();
+                      }
+                    }}
+                  >
+                    <p className={cn(
+                      "text-sm font-bold text-white",
+                      notificationPermission === 'default' && "group-hover:text-emerald-400 underline decoration-emerald-500/30 underline-offset-4"
+                    )}>
+                      Web Notifications
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {notificationPermission === 'granted' ? 'Enabled for this browser' : 
+                       notificationPermission === 'denied' ? 'Blocked by browser settings' : 'Click to enable notifications'}
+                    </p>
+                  </div>
+                </div>
+                {notificationPermission === 'default' && (
+                  <button 
+                    onClick={onRequestNotifications}
+                    className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-emerald-500 transition-all"
+                  >
+                    Enable
+                  </button>
+                )}
+                {notificationPermission === 'denied' && (
+                  <div 
+                    className="text-xs text-rose-400 font-medium flex items-center gap-1 cursor-help hover:text-rose-300 transition-colors"
+                    title="To enable notifications, click the lock icon in your browser address bar and change 'Notifications' to 'Allow'."
+                  >
+                    <AlertCircle className="w-4 h-4" /> Please enable in browser settings
+                  </div>
+                )}
+                {notificationPermission === 'granted' && (
+                  <div className="text-xs text-emerald-500 font-medium flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Active
+                  </div>
+                )}
+              </div>
+              
+              <div className="p-4 bg-slate-800/20 rounded-2xl border border-dashed border-slate-700">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  When enabled, you will receive real-time notifications for:
+                </p>
+                <ul className="mt-2 space-y-1">
+                  <li className="text-xs text-slate-400 flex items-center gap-2">
+                    <div className="w-1 h-1 rounded-full bg-emerald-500" /> Appointment Reminders
+                  </li>
+                  <li className="text-xs text-slate-400 flex items-center gap-2">
+                    <div className="w-1 h-1 rounded-full bg-emerald-500" /> Shared Documents
+                  </li>
+                  <li className="text-xs text-slate-400 flex items-center gap-2">
+                    <div className="w-1 h-1 rounded-full bg-emerald-500" /> Message Notifications
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </Card>
         </div>
 
         <div className="space-y-6">

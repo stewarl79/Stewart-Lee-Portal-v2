@@ -89,6 +89,10 @@ service cloud.firestore {
       return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
     }
 
+    function isValidTimestamp(ts) {
+      return ts is timestamp || isValidDateString(ts);
+    }
+
     function hasOnlyAllowedFields(fields) {
       return request.resource.data.keys().hasOnly(fields);
     }
@@ -99,7 +103,7 @@ service cloud.firestore {
 
     function isValidUser(data, uid) {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
-             hasOnlyAllowedFields(['uid', 'email', 'displayName', 'phone', 'role', 'createdAt', 'mustChangePassword']) &&
+             hasOnlyAllowedFields(['uid', 'email', 'displayName', 'phone', 'role', 'createdAt', 'mustChangePassword', 'photoURL', 'reminderTemplate']) &&
              data.uid == uid &&
              data.email is string && isValidEmail(data.email) &&
              data.role in ['coach', 'client'] &&
@@ -123,13 +127,22 @@ service cloud.firestore {
     }
 
     function isValidDocument(data) {
-      return data.keys().hasAll(['name', 'url', 'ownerUid', 'sharedWithEmail', 'createdAt']) &&
-             hasOnlyAllowedFields(['name', 'url', 'ownerUid', 'sharedWithEmail', 'sharedWithUid', 'createdAt']) &&
+      return data.keys().hasAll(['name', 'url', 'sharedWithEmail']) &&
+             hasOnlyAllowedFields(['name', 'url', 'ownerUid', 'sharedWithEmail', 'sharedWithUid', 'createdAt', 'sharedAt', 'sharedBy', 'isDriveFile', 'driveFileId', 'clientUid']) &&
              data.name is string && data.name.size() < 255 &&
              isValidUrl(data.url) &&
-             data.ownerUid is string &&
-             isValidEmail(data.sharedWithEmail) &&
-             isValidDateString(data.createdAt);
+             isValidEmail(data.sharedWithEmail);
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['senderUid', 'receiverUid', 'content', 'createdAt', 'isRead', 'type']) &&
+             hasOnlyAllowedFields(['senderUid', 'receiverUid', 'content', 'createdAt', 'isRead', 'type', 'metadata']) &&
+             data.senderUid == request.auth.uid &&
+             data.receiverUid is string &&
+             data.content is string && data.content.size() < 5000 &&
+             data.createdAt is timestamp &&
+             data.isRead is bool &&
+             data.type in ['text', 'system'];
     }
 
     function isValidRequest(data) {
@@ -207,6 +220,19 @@ service cloud.firestore {
       // ONLY coaches can read or write these notes.
       allow read: if isCoach();
       allow write: if isCoach() && isValidCoachNote(request.resource.data);
+    }
+
+    match /messages/{messageId} {
+      // Users can read messages where they are either sender or receiver.
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderUid || request.auth.uid == resource.data.receiverUid);
+      
+      // Users can create messages if they are the sender.
+      allow create: if isAuthenticated() && isValidMessage(request.resource.data);
+      
+      // Receivers can mark messages as read.
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.receiverUid && 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']) &&
+                    request.resource.data.isRead == true;
     }
   }
 }

@@ -1,5 +1,5 @@
 {
   "name": "MrLeeTeaches Coaching Portal",
   "description": "A full-stack coaching management platform for scheduling, document sharing, and automated reminders.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["notifications"]
 }

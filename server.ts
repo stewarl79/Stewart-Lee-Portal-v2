@@ -72,7 +72,206 @@ async function startServer() {
 
   // --- Google Calendar Sync Logic ---
   const calendar = google.calendar("v3");
-  
+  const drive = google.drive("v3");
+
+  // OAuth2 client for Coach's personal Drive access
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+
+  // Helper to get authorized Drive client
+  async function getDriveClient() {
+    const tokensDoc = await db.collection("config").doc("google_drive_tokens").get();
+    if (!tokensDoc.exists) {
+      throw new Error("Google Drive not connected. Please connect your account in settings.");
+    }
+    const tokens = tokensDoc.data()!;
+    oauth2Client.setCredentials(tokens);
+
+    // Refresh token if needed
+    oauth2Client.on('tokens', async (newTokens) => {
+      if (newTokens.refresh_token) {
+        await db.collection("config").doc("google_drive_tokens").set(newTokens, { merge: true });
+      } else {
+        await db.collection("config").doc("google_drive_tokens").set({
+          access_token: newTokens.access_token,
+          expiry_date: newTokens.expiry_date,
+          token_type: newTokens.token_type,
+          scope: newTokens.scope
+        }, { merge: true });
+      }
+    });
+
+    return drive;
+  }
+
+  // Auth Routes
+  app.get("/api/auth/google/url", (req, res) => {
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['https://www.googleapis.com/auth/drive'],
+      prompt: 'consent'
+    });
+    res.json({ url });
+  });
+
+  app.get("/api/auth/google/callback", async (req, res) => {
+    const { code } = req.query;
+    try {
+      const { tokens } = await oauth2Client.getToken(code as string);
+      await db.collection("config").doc("google_drive_tokens").set(tokens);
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white;">
+            <div style="text-align: center; background: #1e293b; padding: 2rem; border-radius: 1rem; border: 1px solid #334155;">
+              <h2 style="color: #10b981;">Connection Successful!</h2>
+              <p>Your Google Drive is now connected to the portal.</p>
+              <p>You can close this window now.</p>
+              <script>
+                setTimeout(() => window.close(), 3000);
+              </script>
+            </div>
+          </body>
+        </html>
+      `);
+    } catch (error: any) {
+      res.status(500).send("Authentication failed: " + error.message);
+    }
+  });
+
+  app.get("/api/drive/status", async (req, res) => {
+    const tokensDoc = await db.collection("config").doc("google_drive_tokens").get();
+    res.json({ connected: tokensDoc.exists });
+  });
+
+  app.post("/api/drive/disconnect", async (req, res) => {
+    try {
+      await db.collection("config").doc("google_drive_tokens").delete();
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Library Routes
+  app.get("/api/drive/library", async (req, res) => {
+    try {
+      const driveClient = await getDriveClient();
+      const folderId = process.env.GOOGLE_DRIVE_LIBRARY_FOLDER_ID;
+      
+      console.log(`Fetching library from folder: ${folderId}`);
+      
+      if (!folderId) {
+        return res.status(400).json({ error: "Library folder ID not configured." });
+      }
+
+      const response = await driveClient.files.list({
+        auth: oauth2Client,
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: 'files(id, name, mimeType, webViewLink, iconLink)',
+        orderBy: 'name'
+      });
+
+      console.log(`Found ${response.data.files?.length || 0} files in library.`);
+      res.json(response.data.files || []);
+    } catch (error: any) {
+      console.error("Library fetch error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/drive/share", async (req, res) => {
+    const { fileId, fileName, clientUid, clientName, clientEmail, coachUid } = req.body;
+    
+    if (!fileId || !clientUid || !clientName || !clientEmail) {
+      return res.status(400).json({ error: "Missing required fields." });
+    }
+
+    try {
+      const driveClient = await getDriveClient();
+      const rootFolderId = process.env.GOOGLE_DRIVE_CLIENTS_ROOT_FOLDER_ID;
+
+      if (!rootFolderId) {
+        throw new Error("Clients root folder ID not configured.");
+      }
+
+      // 1. Find or create client folder
+      let clientFolderId: string;
+      const folderSearch = await driveClient.files.list({
+        auth: oauth2Client,
+        q: `'${rootFolderId}' in parents and name = '${clientName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id)'
+      });
+
+      if (folderSearch.data.files && folderSearch.data.files.length > 0) {
+        clientFolderId = folderSearch.data.files[0].id!;
+      } else {
+        const newFolder = await driveClient.files.create({
+          auth: oauth2Client,
+          requestBody: {
+            name: clientName,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [rootFolderId]
+          },
+          fields: 'id'
+        });
+        clientFolderId = newFolder.data.id!;
+      }
+
+      // 2. Copy file to client folder
+      const copyResponse = await driveClient.files.copy({
+        auth: oauth2Client,
+        fileId: fileId,
+        requestBody: {
+          name: fileName,
+          parents: [clientFolderId]
+        },
+        fields: 'id, name, webViewLink'
+      });
+
+      const sharedFile = copyResponse.data;
+
+      // 3. Save to Firestore shared documents
+      const docData = {
+        name: sharedFile.name,
+        url: sharedFile.webViewLink,
+        ownerUid: coachUid || "coach",
+        clientUid: clientUid,
+        sharedWithEmail: clientEmail,
+        sharedBy: "coach",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        isDriveFile: true,
+        driveFileId: sharedFile.id
+      };
+
+      await db.collection("documents").add(docData);
+
+      // 4. Create a system message for the client
+      if (coachUid) {
+        await db.collection("messages").add({
+          senderUid: coachUid,
+          receiverUid: clientUid,
+          content: `I've shared a new document with you: ${sharedFile.name}`,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          isRead: false,
+          type: "system",
+          metadata: {
+            documentId: sharedFile.id,
+            documentName: sharedFile.name,
+            documentUrl: sharedFile.webViewLink
+          }
+        });
+      }
+
+      res.json({ message: "File shared successfully", document: docData });
+    } catch (error: any) {
+      console.error("Drive share error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   async function getGoogleAuthClient() {
     if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
       throw new Error("Google Service Account credentials missing in environment variables.");
@@ -212,6 +411,8 @@ TO FIX THIS:
       // Generate a temporary password
       const tempPassword = Math.random().toString(36).slice(-10) + "!";
       
+      console.log(`Attempting to create user in Auth: ${email} (Project: ${admin.app().options.projectId || firebaseConfig.projectId})`);
+
       // Create user in Firebase Auth
       const userRecord = await admin.auth().createUser({
         email,
@@ -220,6 +421,8 @@ TO FIX THIS:
         phoneNumber: formattedPhone
       });
 
+      console.log(`Successfully created Auth user: ${userRecord.uid}`);
+
       // Create user profile in Firestore
       await db.collection("users").doc(userRecord.uid).set({
         uid: userRecord.uid,
@@ -227,9 +430,12 @@ TO FIX THIS:
         displayName,
         phone: formattedPhone || null,
         role: "client",
+        isActive: true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         mustChangePassword: true
       });
+
+      console.log(`Successfully created Firestore profile for: ${userRecord.uid}`);
 
       // Send email with temporary password
       const emailBody = `

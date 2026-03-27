@@ -11,6 +11,7 @@
         "photoURL": { "type": "string", "format": "uri", "description": "User's avatar URL" },
         "phone": { "type": "string", "description": "User's phone number" },
         "role": { "type": "string", "enum": ["coach", "client"], "description": "User's role" },
+        "isActive": { "type": "boolean", "description": "Whether the client is currently active" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Account creation time" },
         "reminderTemplate": { "type": "string", "description": "Custom reminder email template" }
       },
@@ -73,6 +74,21 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last update time" }
       },
       "required": ["clientUid", "content"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A message between coach and client.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string", "description": "UID of the sender" },
+        "receiverUid": { "type": "string", "description": "UID of the receiver" },
+        "content": { "type": "string", "description": "Message content" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Time sent" },
+        "isRead": { "type": "boolean", "description": "Whether the message has been read" },
+        "type": { "type": "string", "enum": ["text", "system"], "description": "Message type" },
+        "metadata": { "type": "object", "description": "Optional metadata (e.g., document info)" }
+      },
+      "required": ["senderUid", "receiverUid", "content", "createdAt", "isRead", "type"]
     }
   },
   "firestore": {
@@ -95,6 +111,10 @@
     "/coach_notes/{clientUid}": {
       "schema": "CoachNote",
       "description": "Private coach notes"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "2-way messaging between coach and client"
     }
   }
 }
