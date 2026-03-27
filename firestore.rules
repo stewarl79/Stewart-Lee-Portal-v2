@@ -57,6 +57,18 @@ service cloud.firestore {
     //   - content: string (required, < 10000 chars) - The note content
     //   - updatedAt: timestamp (optional) - Last update time
     //
+    // Collection: private_notes
+    // Document ID: {noteId}
+    // Fields:
+    //   - title: string (required) - Note title
+    //   - driveFileId: string (required) - Google Drive File ID
+    //   - webViewLink: string (required) - Google Drive Link
+    //   - clientUid: string (required) - Client's UID
+    //   - coachUid: string (required) - Coach's UID
+    //   - appointmentId: string (optional) - Linked Appointment ID
+    //   - createdAt: timestamp (required) - Creation time
+    //   - updatedAt: timestamp (optional) - Last update time
+    //
     // ===============================================================
 
     // ===============================================================
@@ -162,6 +174,17 @@ service cloud.firestore {
              data.content is string && data.content.size() < 10000;
     }
 
+    function isValidPrivateNote(data) {
+      return data.keys().hasAll(['title', 'driveFileId', 'webViewLink', 'clientUid', 'coachUid', 'createdAt']) &&
+             hasOnlyAllowedFields(['title', 'driveFileId', 'webViewLink', 'clientUid', 'coachUid', 'appointmentId', 'createdAt', 'updatedAt']) &&
+             data.title is string && data.title.size() < 255 &&
+             data.driveFileId is string &&
+             isValidUrl(data.webViewLink) &&
+             data.clientUid is string &&
+             data.coachUid == request.auth.uid &&
+             data.createdAt is timestamp;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -220,6 +243,14 @@ service cloud.firestore {
       // ONLY coaches can read or write these notes.
       allow read: if isCoach();
       allow write: if isCoach() && isValidCoachNote(request.resource.data);
+    }
+
+    match /private_notes/{noteId} {
+      // ONLY coaches can read or write these notes.
+      allow read: if isCoach();
+      allow create: if isCoach() && isValidPrivateNote(request.resource.data);
+      allow update: if isCoach() && isValidPrivateNote(request.resource.data);
+      allow delete: if isCoach();
     }
 
     match /messages/{messageId} {

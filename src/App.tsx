@@ -24,7 +24,8 @@ import {
   RefreshCw,
   Share2,
   Library,
-  MessageSquare
+  MessageSquare,
+  FolderOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -1990,6 +1991,254 @@ function CoachNotesSection({ clientUid }: { clientUid: string }) {
   );
 }
 
+function PrivateNotesSection({ clientUid, clientEmail, appointments }: { clientUid: string, clientEmail: string, appointments: any[] }) {
+  const [notes, setNotes] = useState<any[]>([]);
+  const [driveFiles, setDriveFiles] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showNewNoteModal, setShowNewNoteModal] = useState(false);
+  const [selectedApptId, setSelectedApptId] = useState('');
+  const [noteTitle, setNoteTitle] = useState('');
+
+  const fetchNotes = async () => {
+    try {
+      const res = await fetch(`/api/private-notes/${clientUid}`);
+      if (res.ok) {
+        const data = await res.json();
+        setNotes(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch private notes:', err);
+    }
+  };
+
+  const fetchDriveFiles = async () => {
+    try {
+      const res = await fetch(`/api/drive/private-notes/${clientUid}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDriveFiles(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch drive files:', err);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([fetchNotes(), fetchDriveFiles()]).finally(() => setLoading(false));
+  }, [clientUid]);
+
+  const handleCreateNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      const response = await fetch('/api/drive/private-notes/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientUid,
+          title: noteTitle,
+          appointmentId: selectedApptId || null
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to create note');
+
+      await fetchNotes();
+      await fetchDriveFiles();
+      setShowNewNoteModal(false);
+      setNoteTitle('');
+      setSelectedApptId('');
+    } catch (err) {
+      console.error('Create note error:', err);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const filteredNotes = notes.filter(n => 
+    n.title.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredFiles = driveFiles.filter(f => 
+    f.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+    !notes.some(n => n.driveFileId === f.id)
+  );
+
+  const clientAppts = appointments
+    .filter(a => a.clientEmail === clientEmail)
+    .sort((a, b) => b.startTime.toDate().getTime() - a.startTime.toDate().getTime());
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Private Session Notes & Files</h4>
+        <button 
+          onClick={() => setShowNewNoteModal(true)}
+          className="flex items-center gap-2 text-xs font-bold text-emerald-500 hover:text-emerald-400 uppercase tracking-wider"
+        >
+          <Plus className="w-4 h-4" /> New Session Note
+        </button>
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+        <input 
+          type="text" 
+          placeholder="Search notes and files..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full bg-slate-800/50 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        />
+      </div>
+
+      {loading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="h-16 bg-slate-800/20 rounded-xl animate-pulse" />
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredNotes.map(note => (
+            <div key={note.id} className="bg-slate-800/20 rounded-xl border border-slate-800 p-4 flex items-center justify-between group hover:border-emerald-500/30 transition-all">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-white font-medium text-sm">{note.title}</p>
+                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+                    {note.createdAt ? format(note.createdAt.toDate(), 'MMM d, yyyy') : 'Recently Created'}
+                  </p>
+                </div>
+              </div>
+              <a 
+                href={note.webViewLink} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="p-2 bg-slate-800 text-slate-400 rounded-lg hover:text-white transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            </div>
+          ))}
+
+          {filteredFiles.map(file => (
+            <div key={file.id} className="bg-slate-800/10 rounded-xl border border-dashed border-slate-800 p-4 flex items-center justify-between group hover:border-slate-700 transition-all">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-slate-500/10 flex items-center justify-center text-slate-500">
+                  <FolderOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-slate-300 font-medium text-sm">{file.name}</p>
+                  <p className="text-[10px] text-slate-600 uppercase font-bold tracking-wider">
+                    {format(new Date(file.modifiedTime), 'MMM d, yyyy')} • Drive File
+                  </p>
+                </div>
+              </div>
+              <a 
+                href={file.webViewLink} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="p-2 bg-slate-800/50 text-slate-500 rounded-lg hover:text-white transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            </div>
+          ))}
+
+          {filteredNotes.length === 0 && filteredFiles.length === 0 && (
+            <div className="text-center py-8 bg-slate-800/5 rounded-2xl border border-dashed border-slate-800">
+              <p className="text-slate-500 text-sm">No private notes or files found.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* New Note Modal */}
+      <AnimatePresence>
+        {showNewNoteModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !creating && setShowNewNoteModal(false)}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <h3 className="text-2xl font-bold text-white mb-2">New Session Note</h3>
+              <p className="text-slate-400 mb-6">Create a private Google Doc for this session.</p>
+
+              <form onSubmit={handleCreateNote} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Associate with Appointment</label>
+                  <select 
+                    value={selectedApptId}
+                    onChange={(e) => {
+                      const apptId = e.target.value;
+                      setSelectedApptId(apptId);
+                      const appt = clientAppts.find(a => a.id === apptId);
+                      if (appt) {
+                        setNoteTitle(`Session Note - ${format(appt.startTime.toDate(), 'yyyy-MM-dd')}`);
+                      }
+                    }}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">Select an appointment...</option>
+                    {clientAppts.map(appt => (
+                      <option key={appt.id} value={appt.id}>
+                        {format(appt.startTime.toDate(), 'MMM d, yyyy')} - {appt.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Note Title</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={noteTitle}
+                    onChange={(e) => setNoteTitle(e.target.value)}
+                    placeholder="e.g., Session Note - 2026-03-27"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    type="button"
+                    disabled={creating}
+                    onClick={() => setShowNewNoteModal(false)}
+                    className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={creating || !noteTitle}
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {creating ? <Clock className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    {creating ? 'Creating...' : 'Create Note'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function ClientsView({ clients, appointments, documents, role, selectedClient, setSelectedClient }: any) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -2410,8 +2659,15 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
               </div>
 
               {role === 'coach' && (
-                <div className="mb-8">
+                <div className="space-y-8 mb-8">
                   <CoachNotesSection clientUid={selectedClient.uid} />
+                  <div className="border-t border-slate-800 pt-8">
+                    <PrivateNotesSection 
+                      clientUid={selectedClient.uid} 
+                      clientEmail={selectedClient.email}
+                      appointments={appointments}
+                    />
+                  </div>
                 </div>
               )}
 

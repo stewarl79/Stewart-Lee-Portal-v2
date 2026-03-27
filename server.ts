@@ -70,6 +70,14 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Force HTTPS redirect for custom domains
+  app.use((req, res, next) => {
+    if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https") {
+      return res.redirect(`https://${req.headers.host}${req.url}`);
+    }
+    next();
+  });
+
   // --- Google Calendar Sync Logic ---
   const calendar = google.calendar("v3");
   const drive = google.drive("v3");
@@ -268,6 +276,156 @@ async function startServer() {
       res.json({ message: "File shared successfully", document: docData });
     } catch (error: any) {
       console.error("Drive share error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // --- Private Coach Notes Routes ---
+  app.get("/api/drive/private-notes/:clientUid", async (req, res) => {
+    const { clientUid } = req.params;
+    try {
+      const driveClient = await getDriveClient();
+      const rootFolderId = process.env.GOOGLE_DRIVE_PRIVATE_NOTES_ROOT_FOLDER_ID;
+      
+      if (!rootFolderId) {
+        return res.status(400).json({ error: "Private notes root folder ID not configured." });
+      }
+
+      // 1. Get client name for folder search
+      const clientDoc = await db.collection("users").doc(clientUid).get();
+      if (!clientDoc.exists) {
+        return res.status(404).json({ error: "Client not found." });
+      }
+      const clientName = clientDoc.data()!.displayName;
+
+      // 2. Find or create client private folder
+      let clientFolderId: string;
+      const folderSearch = await driveClient.files.list({
+        auth: oauth2Client,
+        q: `'${rootFolderId}' in parents and name = '${clientName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id)'
+      });
+
+      if (folderSearch.data.files && folderSearch.data.files.length > 0) {
+        clientFolderId = folderSearch.data.files[0].id!;
+      } else {
+        const newFolder = await driveClient.files.create({
+          auth: oauth2Client,
+          requestBody: {
+            name: clientName,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [rootFolderId]
+          },
+          fields: 'id'
+        });
+        clientFolderId = newFolder.data.id!;
+      }
+
+      // 3. List files in the folder
+      const response = await driveClient.files.list({
+        auth: oauth2Client,
+        q: `'${clientFolderId}' in parents and trashed = false`,
+        fields: 'files(id, name, mimeType, webViewLink, iconLink, modifiedTime)',
+        orderBy: 'modifiedTime desc'
+      });
+
+      res.json(response.data.files || []);
+    } catch (error: any) {
+      console.error("Private notes fetch error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/drive/private-notes/create", async (req, res) => {
+    const { clientUid, title, appointmentId, coachUid } = req.body;
+    
+    if (!clientUid || !title) {
+      return res.status(400).json({ error: "Missing required fields." });
+    }
+
+    try {
+      const driveClient = await getDriveClient();
+      const rootFolderId = process.env.GOOGLE_DRIVE_PRIVATE_NOTES_ROOT_FOLDER_ID;
+
+      if (!rootFolderId) {
+        throw new Error("Private notes root folder ID not configured.");
+      }
+
+      // 1. Get client name
+      const clientDoc = await db.collection("users").doc(clientUid).get();
+      const clientName = clientDoc.data()!.displayName;
+
+      // 2. Find or create client private folder
+      let clientFolderId: string;
+      const folderSearch = await driveClient.files.list({
+        auth: oauth2Client,
+        q: `'${rootFolderId}' in parents and name = '${clientName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id)'
+      });
+
+      if (folderSearch.data.files && folderSearch.data.files.length > 0) {
+        clientFolderId = folderSearch.data.files[0].id!;
+      } else {
+        const newFolder = await driveClient.files.create({
+          auth: oauth2Client,
+          requestBody: {
+            name: clientName,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [rootFolderId]
+          },
+          fields: 'id'
+        });
+        clientFolderId = newFolder.data.id!;
+      }
+
+      // 3. Create a new Google Doc for the note
+      const fileMetadata = {
+        name: title,
+        mimeType: 'application/vnd.google-apps.document',
+        parents: [clientFolderId]
+      };
+
+      const file = await driveClient.files.create({
+        auth: oauth2Client,
+        requestBody: fileMetadata,
+        fields: 'id, name, webViewLink'
+      });
+
+      const newNote = file.data;
+
+      // 4. Save metadata to Firestore for searching
+      const noteMetadata = {
+        title: newNote.name,
+        driveFileId: newNote.id,
+        webViewLink: newNote.webViewLink,
+        clientUid,
+        coachUid: coachUid || "coach",
+        appointmentId: appointmentId || null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      const docRef = await db.collection("private_notes").add(noteMetadata);
+
+      res.json({ id: docRef.id, ...noteMetadata });
+    } catch (error: any) {
+      console.error("Private note creation error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/private-notes/:clientUid", async (req, res) => {
+    const { clientUid } = req.params;
+    try {
+      const snapshot = await db.collection("private_notes")
+        .where("clientUid", "==", clientUid)
+        .orderBy("createdAt", "desc")
+        .get();
+      
+      const notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      res.json(notes);
+    } catch (error: any) {
+      console.error("Firestore private notes fetch error:", error);
       res.status(500).json({ error: error.message });
     }
   });
