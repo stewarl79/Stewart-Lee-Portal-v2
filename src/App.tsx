@@ -10,6 +10,8 @@ import {
   Plus, 
   Search, 
   ChevronRight, 
+  ChevronDown,
+  ChevronUp,
   Mail, 
   Upload, 
   Download, 
@@ -20,14 +22,21 @@ import {
   AlertCircle,
   Menu,
   X,
+  Edit2,
   UserPlus,
   RefreshCw,
   Share2,
   Library,
   MessageSquare,
-  FolderOpen
+  FolderOpen,
+  ShieldCheck,
+  FileCheck,
+  ArrowRight,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
@@ -66,6 +75,15 @@ import { format, isAfter, isBefore, addHours, startOfDay, endOfDay, parseISO, di
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+function safeToDate(date: any): Date {
+  if (!date) return new Date();
+  if (typeof date.toDate === 'function') return date.toDate();
+  if (date._seconds) return new Date(date._seconds * 1000);
+  if (date.seconds) return new Date(date.seconds * 1000);
+  const parsed = new Date(date);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
 enum OperationType {
@@ -111,6 +129,28 @@ interface UserProfile {
   createdAt: any;
   mustChangePassword?: boolean;
   reminderTemplate?: string;
+  isOnboarded?: boolean;
+  age?: number;
+  preferredName?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  formalDiagnosis?: string;
+  schedulingConstraints?: string;
+  prompt?: string;
+  challenges?: string[];
+  otherChallenge?: string;
+  duration?: string;
+  seeingTherapist?: string;
+  strengths?: string;
+  frequency?: string;
+  anythingElse?: string;
+  onboardingData?: any;
+  parentName?: string;
+  parentPhone?: string;
+  parentEmail?: string;
+  secondaryParentName?: string;
+  secondaryParentPhone?: string;
+  secondaryParentEmail?: string;
 }
 
 interface Appointment {
@@ -154,8 +194,8 @@ const isCalendarId = (email: string) => {
 };
 
 const getGoogleCalendarLink = (appt: Appointment) => {
-  const start = appt.startTime.toDate().toISOString().replace(/-|:|\.\d\d\d/g, '');
-  const end = appt.endTime.toDate().toISOString().replace(/-|:|\.\d\d\d/g, '');
+  const start = safeToDate(appt.startTime).toISOString().replace(/-|:|\.\d\d\d/g, '');
+  const end = safeToDate(appt.endTime).toISOString().replace(/-|:|\.\d\d\d/g, '');
   const details = appt.description || appt.notes || '';
   const location = appt.meetLink || '';
   
@@ -410,7 +450,7 @@ const MessagingView = ({
                         )}
                       </div>
                       <span className="text-[10px] text-slate-500 mt-1 px-1">
-                        {format(msg.createdAt?.toDate() || new Date(), 'h:mm a')}
+                        {format(safeToDate(msg.createdAt), 'h:mm a')}
                         {isMe && (
                           <span className="ml-2">
                             {msg.isRead ? 'Read' : 'Sent'}
@@ -553,7 +593,8 @@ export default function App() {
               email: u.email!,
               displayName: u.displayName || 'User',
               role: u.email === 'msustewart@gmail.com' ? 'coach' : 'client',
-              createdAt: serverTimestamp()
+              createdAt: serverTimestamp(),
+              isOnboarded: u.email === 'msustewart@gmail.com' ? true : false
             };
             await setDoc(docRef, newProfile);
             setProfile(newProfile);
@@ -712,16 +753,37 @@ export default function App() {
     setPasswordChangeError('');
     try {
       if (auth.currentUser) {
-        await updatePassword(auth.currentUser, newPassword);
-        await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+        console.log("DEBUG: handlePasswordChange - Current UID:", auth.currentUser.uid);
+        console.log("DEBUG: handlePasswordChange - Profile UID:", profile?.uid);
+        
+        // Only update password if it's not a Google user (Google users don't have passwords to update this way)
+        const isGoogleUser = auth.currentUser.providerData.some(p => p.providerId === 'google.com');
+        console.log("DEBUG: handlePasswordChange - isGoogleUser:", isGoogleUser);
+        
+        if (!isGoogleUser) {
+          console.log("DEBUG: handlePasswordChange - Updating Auth password...");
+          await updatePassword(auth.currentUser, newPassword);
+        } else {
+          console.log("DEBUG: handlePasswordChange - Skipping Auth password update for Google user.");
+        }
+
+        console.log("DEBUG: handlePasswordChange - Updating Firestore profile...");
+        const userRef = doc(db, 'users', auth.currentUser.uid);
+        await updateDoc(userRef, {
           mustChangePassword: false
         });
+        
         setShowPasswordChange(false);
         setProfile(prev => prev ? { ...prev, mustChangePassword: false } : null);
         alert('Password changed successfully!');
       }
     } catch (error: any) {
-      setPasswordChangeError(error.message);
+      console.error('Password change error:', error);
+      if (error.code === 'permission-denied') {
+        setPasswordChangeError('Permission denied. Please contact your coach.');
+      } else {
+        setPasswordChangeError(error.message);
+      }
     } finally {
       setPasswordChangeLoading(false);
     }
@@ -868,6 +930,12 @@ export default function App() {
     );
   }
 
+  if (profile?.role === 'client' && !profile?.isOnboarded && !showPasswordChange) {
+    return <OnboardingView user={user} onComplete={() => {
+      setProfile(prev => prev ? { ...prev, isOnboarded: true } : null);
+    }} />;
+  }
+
   const handleReschedule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedAppointment) return;
@@ -944,7 +1012,7 @@ export default function App() {
   };
 
   const openAction = (appt: any, type: 'cancel' | 'reschedule') => {
-    const hoursDiff = differenceInHours(appt.startTime.toDate(), new Date());
+    const hoursDiff = differenceInHours(safeToDate(appt.startTime), new Date());
     if (hoursDiff <= 24) {
       setShowLateNoticeModal(true);
     } else {
@@ -1481,7 +1549,7 @@ function DashboardView({
   onRequestNotifications
 }: any) {
   const nextAppointment = useMemo(() => {
-    return appointments.find((a: any) => isAfter(a.startTime.toDate(), new Date()) && a.status === 'scheduled');
+    return appointments.find((a: any) => isAfter(safeToDate(a.startTime), new Date()) && a.status === 'scheduled');
   }, [appointments]);
 
   const unreadCount = useMemo(() => {
@@ -1492,7 +1560,7 @@ function DashboardView({
     profile?.role === 'coach' 
       ? { label: 'Active Clients', value: clients.filter((c: any) => c.isActive !== false).length, icon: Users, color: 'text-blue-400', bg: 'bg-blue-400/10', tab: 'clients' }
       : { label: 'Shared Documents', value: documents.length, icon: FileText, color: 'text-blue-400', bg: 'bg-blue-400/10', tab: 'documents' },
-    { label: 'Upcoming Sessions', value: appointments.filter((a: any) => a.status === 'scheduled' && isAfter(a.startTime.toDate(), new Date())).length, icon: Calendar, color: 'text-emerald-400', bg: 'bg-emerald-400/10', tab: 'calendar' },
+    { label: 'Upcoming Sessions', value: appointments.filter((a: any) => a.status === 'scheduled' && isAfter(safeToDate(a.startTime), new Date())).length, icon: Calendar, color: 'text-emerald-400', bg: 'bg-emerald-400/10', tab: 'calendar' },
     { label: 'New Messages', value: unreadCount, icon: MessageSquare, color: 'text-amber-400', bg: 'bg-amber-400/10', tab: 'messaging' },
   ];
 
@@ -1575,11 +1643,11 @@ function DashboardView({
               <div className="grid grid-cols-2 gap-4 mt-6">
                 <div className="flex items-center gap-3 text-slate-300">
                   <Calendar className="w-5 h-5 text-emerald-500" />
-                  <span className="text-sm">{format(nextAppointment.startTime.toDate(), 'MMM d, yyyy')}</span>
+                  <span className="text-sm">{format(safeToDate(nextAppointment.startTime), 'MMM d, yyyy')}</span>
                 </div>
                 <div className="flex items-center gap-3 text-slate-300">
                   <Clock className="w-5 h-5 text-emerald-500" />
-                  <span className="text-sm">{format(nextAppointment.startTime.toDate(), 'h:mm a')}</span>
+                  <span className="text-sm">{format(safeToDate(nextAppointment.startTime), 'h:mm a')}</span>
                 </div>
               </div>
               {nextAppointment.meetLink && (
@@ -1662,7 +1730,7 @@ function DashboardView({
                     <FileText className="w-5 h-5 text-amber-400 shrink-0" />
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-white truncate group-hover:text-emerald-400 transition-colors">{doc.name}</p>
-                      <p className="text-xs text-slate-500">{format(doc.createdAt.toDate(), 'MMM d')}</p>
+                      <p className="text-xs text-slate-500">{format(safeToDate(doc.createdAt), 'MMM d')}</p>
                     </div>
                   </a>
                   <a href={doc.url} target="_blank" rel="noopener noreferrer" className="p-2 text-slate-400 hover:text-white shrink-0">
@@ -1687,7 +1755,7 @@ function CalendarView({ appointments, role, onAction }: any) {
   
   const dayAppointments = useMemo(() => {
     return appointments.filter((a: any) => {
-      const date = a.startTime.toDate();
+      const date = safeToDate(a.startTime);
       return isSameDay(date, selectedDate);
     });
   }, [appointments, selectedDate]);
@@ -1804,7 +1872,7 @@ function CalendarView({ appointments, role, onAction }: any) {
 
           <div className="grid grid-cols-1 md:grid-cols-7 gap-4">
             {weekDays.map((day) => {
-              const dayAppts = appointments.filter((a: any) => isSameDay(a.startTime.toDate(), day));
+              const dayAppts = appointments.filter((a: any) => isSameDay(safeToDate(a.startTime), day));
               const isToday = isSameDay(day, new Date());
               const isSelected = isSameDay(day, selectedDate);
 
@@ -1839,7 +1907,7 @@ function CalendarView({ appointments, role, onAction }: any) {
                           }}
                           className="w-full text-left p-2 bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 rounded-lg transition-all group"
                         >
-                          <p className="text-[10px] font-bold text-emerald-500 mb-0.5">{format(appt.startTime.toDate(), 'h:mm a')}</p>
+                          <p className="text-[10px] font-bold text-emerald-500 mb-0.5">{format(safeToDate(appt.startTime), 'h:mm a')}</p>
                           <p className="text-xs font-medium text-white truncate group-hover:text-emerald-400">{appt.title}</p>
                         </button>
                       ))
@@ -1865,8 +1933,8 @@ function AppointmentCard({ appt, role, onAction }: any) {
       <div className="flex items-start justify-between">
         <div className="flex gap-4">
           <div className="flex flex-col items-center justify-center w-16 h-16 bg-slate-900 rounded-xl border border-slate-700">
-            <span className="text-xs font-bold text-emerald-500 uppercase">{format(appt.startTime.toDate(), 'h:mm')}</span>
-            <span className="text-xs text-slate-500">{format(appt.startTime.toDate(), 'a')}</span>
+            <span className="text-xs font-bold text-emerald-500 uppercase">{format(safeToDate(appt.startTime), 'h:mm')}</span>
+            <span className="text-xs text-slate-500">{format(safeToDate(appt.startTime), 'a')}</span>
           </div>
           <div>
             <h4 className="text-lg font-bold text-white group-hover:text-emerald-400 transition-colors">{appt.title}</h4>
@@ -2069,7 +2137,7 @@ function PrivateNotesSection({ clientUid, clientEmail, appointments }: { clientU
 
   const clientAppts = appointments
     .filter(a => a.clientEmail === clientEmail)
-    .sort((a, b) => b.startTime.toDate().getTime() - a.startTime.toDate().getTime());
+    .sort((a, b) => safeToDate(b.startTime).getTime() - safeToDate(a.startTime).getTime());
 
   return (
     <div className="space-y-6">
@@ -2111,7 +2179,7 @@ function PrivateNotesSection({ clientUid, clientEmail, appointments }: { clientU
                 <div>
                   <p className="text-white font-medium text-sm">{note.title}</p>
                   <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-                    {note.createdAt ? format(note.createdAt.toDate(), 'MMM d, yyyy') : 'Recently Created'}
+                    {note.createdAt ? format(safeToDate(note.createdAt), 'MMM d, yyyy') : 'Recently Created'}
                   </p>
                 </div>
               </div>
@@ -2188,7 +2256,7 @@ function PrivateNotesSection({ clientUid, clientEmail, appointments }: { clientU
                       setSelectedApptId(apptId);
                       const appt = clientAppts.find(a => a.id === apptId);
                       if (appt) {
-                        setNoteTitle(`Session Note - ${format(appt.startTime.toDate(), 'yyyy-MM-dd')}`);
+                        setNoteTitle(`Session Note - ${format(safeToDate(appt.startTime), 'yyyy-MM-dd')}`);
                       }
                     }}
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -2196,7 +2264,7 @@ function PrivateNotesSection({ clientUid, clientEmail, appointments }: { clientU
                     <option value="">Select an appointment...</option>
                     {clientAppts.map(appt => (
                       <option key={appt.id} value={appt.id}>
-                        {format(appt.startTime.toDate(), 'MMM d, yyyy')} - {appt.title}
+                        {format(safeToDate(appt.startTime), 'MMM d, yyyy')} - {appt.title}
                       </option>
                     ))}
                   </select>
@@ -2239,12 +2307,561 @@ function PrivateNotesSection({ clientUid, clientEmail, appointments }: { clientU
   );
 }
 
+function OnboardingView({ user, onComplete }: { user: User, onComplete: () => void }) {
+  const [step, setStep] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: user.email || '',
+    phone: '',
+    preferredName: '',
+    age: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    prompt: '',
+    challenges: [] as string[],
+    otherChallenge: '',
+    duration: '',
+    formalDiagnosis: '',
+    seeingTherapist: '',
+    strengths: '',
+    frequency: '',
+    schedulingConstraints: '',
+    anythingElse: '',
+    agreedToTerms: false,
+    parentName: '',
+    parentPhone: '',
+    parentEmail: '',
+    secondaryParentName: '',
+    secondaryParentPhone: '',
+    secondaryParentEmail: ''
+  });
+
+  const challengesOptions = [
+    "Homework initiation",
+    "Organization / losing materials",
+    "Time management",
+    "Emotional shutdown",
+    "School/Work Avoidance",
+    "Transitions",
+    "Follow-through"
+  ];
+
+  const handleChallengeToggle = (option: string) => {
+    setFormData(prev => ({
+      ...prev,
+      challenges: prev.challenges.includes(option)
+        ? prev.challenges.filter(c => c !== option)
+        : [...prev.challenges, option]
+    }));
+  };
+
+  const generatePDF = () => {
+    const doc = new jsPDF();
+    const title = "Stewart Lee Coaching - Intake Form Responses";
+    
+    doc.setFontSize(20);
+    doc.text(title, 20, 20);
+    
+    doc.setFontSize(12);
+    doc.text(`Client: ${formData.name}`, 20, 30);
+    doc.text(`Email: ${formData.email}`, 20, 35);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 20, 40);
+
+    const tableData = [
+      ["Question", "Response"],
+      ["Preferred Name", formData.preferredName || "N/A"],
+      ["Phone Number", formData.phone],
+      ["Age", formData.age],
+      ["Parent/Guardian Name", formData.parentName || "N/A"],
+      ["Parent/Guardian Phone", formData.parentPhone || "N/A"],
+      ["Parent/Guardian Email", formData.parentEmail || "N/A"],
+      ["Secondary Parent/Guardian", formData.secondaryParentName ? `${formData.secondaryParentName} (${formData.secondaryParentPhone}, ${formData.secondaryParentEmail})` : "N/A"],
+      ["Emergency Contact", `${formData.emergencyContactName} (${formData.emergencyContactPhone})`],
+      ["Prompt for Support", formData.prompt],
+      ["Current Challenges", formData.challenges.join(", ") + (formData.otherChallenge ? `, Other: ${formData.otherChallenge}` : "")],
+      ["Challenge Duration", formData.duration],
+      ["Formal Diagnosis", formData.formalDiagnosis || "None shared"],
+      ["Seeing Therapist?", formData.seeingTherapist],
+      ["Strengths", formData.strengths],
+      ["Preferred Frequency", formData.frequency],
+      ["Scheduling Constraints", formData.schedulingConstraints],
+      ["Additional Info", formData.anythingElse || "N/A"],
+      ["Agreed to Terms", "Yes"]
+    ];
+
+    autoTable(doc, {
+      startY: 50,
+      head: [tableData[0]],
+      body: tableData.slice(1),
+      theme: 'striped',
+      headStyles: { fillColor: [16, 185, 129] } // Emerald-500
+    });
+
+    return doc.output('blob');
+  };
+
+  const handleSubmit = async () => {
+    setLoading(true);
+    try {
+      const pdfBlob = generatePDF();
+      const reader = new FileReader();
+      reader.readAsDataURL(pdfBlob);
+      reader.onloadend = async () => {
+        const base64data = (reader.result as string).split(',')[1];
+        
+        const response = await fetch('/api/onboarding/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientUid: user.uid,
+            onboardingData: formData,
+            pdfBase64: base64data
+          })
+        });
+
+        if (response.ok) {
+          onComplete();
+        } else {
+          throw new Error('Failed to submit onboarding');
+        }
+      };
+    } catch (err) {
+      console.error('Onboarding error:', err);
+      alert('Failed to submit onboarding. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isStepValid = () => {
+    const age = parseInt(formData.age);
+    switch(step) {
+      case 1: 
+        if (!formData.name || !formData.phone || !formData.age) return false;
+        if (age < 13) return false;
+        if (age >= 13 && age <= 17) {
+          return formData.parentName && formData.parentPhone && formData.parentEmail;
+        }
+        return true;
+      case 2: return formData.emergencyContactName && formData.emergencyContactPhone;
+      case 3: return formData.prompt && (formData.challenges.length > 0 || formData.otherChallenge) && formData.duration;
+      case 4: return formData.seeingTherapist;
+      case 5: return formData.strengths && formData.frequency && formData.schedulingConstraints;
+      case 6: return formData.agreedToTerms;
+      default: return false;
+    }
+  };
+
+  const renderStep = () => {
+    switch(step) {
+      case 1:
+        const age = parseInt(formData.age);
+        return (
+          <div className="space-y-4">
+            <h3 className="text-xl font-bold text-white">Basic Information</h3>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Full Name *</label>
+              <input 
+                type="text" 
+                value={formData.name}
+                onChange={e => setFormData({...formData, name: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                placeholder="John Doe"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Phone Number *</label>
+              <input 
+                type="tel" 
+                value={formData.phone}
+                onChange={e => setFormData({...formData, phone: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                placeholder="864-209-1043"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Age *</label>
+                <input 
+                  type="number" 
+                  value={formData.age}
+                  onChange={e => setFormData({...formData, age: e.target.value})}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                  placeholder="25"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Preferred Name</label>
+                <input 
+                  type="text" 
+                  value={formData.preferredName}
+                  onChange={e => setFormData({...formData, preferredName: e.target.value})}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                  placeholder="Johnny"
+                />
+              </div>
+            </div>
+
+            {age > 0 && age < 13 && (
+              <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl">
+                <p className="text-rose-400 text-sm font-medium">
+                  We're sorry, but users under 13 cannot create an account directly. 
+                  Please have your parent or guardian contact Stewart Lee at <a href="mailto:coach@mrleeteaches.com" className="underline font-bold">coach@mrleeteaches.com</a> to discuss coaching options.
+                </p>
+              </div>
+            )}
+
+            {age >= 13 && age <= 17 && (
+              <div className="space-y-4 pt-4 border-t border-slate-800">
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
+                  <p className="text-emerald-400 text-sm font-medium">
+                    Note: For clients between 13 and 17, a parent or guardian will be the primary point of contact unless other arrangements have been made with Stewart Lee personally.
+                  </p>
+                </div>
+                <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Parent/Guardian Information</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Name *</label>
+                    <input 
+                      type="text" 
+                      value={formData.parentName}
+                      onChange={e => setFormData({...formData, parentName: e.target.value})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Phone *</label>
+                    <input 
+                      type="tel" 
+                      value={formData.parentPhone}
+                      onChange={e => setFormData({...formData, parentPhone: e.target.value})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Email *</label>
+                  <input 
+                    type="email" 
+                    value={formData.parentEmail}
+                    onChange={e => setFormData({...formData, parentEmail: e.target.value})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Secondary Parent/Guardian (Optional)</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Name</label>
+                      <input 
+                        type="text" 
+                        value={formData.secondaryParentName}
+                        onChange={e => setFormData({...formData, secondaryParentName: e.target.value})}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Phone</label>
+                      <input 
+                        type="tel" 
+                        value={formData.secondaryParentPhone}
+                        onChange={e => setFormData({...formData, secondaryParentPhone: e.target.value})}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-4">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Email</label>
+                    <input 
+                      type="email" 
+                      value={formData.secondaryParentEmail}
+                      onChange={e => setFormData({...formData, secondaryParentEmail: e.target.value})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      case 2:
+        return (
+          <div className="space-y-4">
+            <h3 className="text-xl font-bold text-white">Emergency Contact</h3>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Contact Name *</label>
+              <input 
+                type="text" 
+                value={formData.emergencyContactName}
+                onChange={e => setFormData({...formData, emergencyContactName: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Contact Phone Number *</label>
+              <input 
+                type="tel" 
+                value={formData.emergencyContactPhone}
+                onChange={e => setFormData({...formData, emergencyContactPhone: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+        );
+      case 3:
+        return (
+          <div className="space-y-4">
+            <h3 className="text-xl font-bold text-white">Current Concerns</h3>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">What prompted you to seek support right now? *</label>
+              <textarea 
+                value={formData.prompt}
+                onChange={e => setFormData({...formData, prompt: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 min-h-[100px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">What feels most challenging at the moment? *</label>
+              <div className="grid grid-cols-1 gap-2">
+                {challengesOptions.map(option => (
+                  <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                    <input 
+                      type="checkbox"
+                      checked={formData.challenges.includes(option)}
+                      onChange={() => handleChallengeToggle(option)}
+                      className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                    />
+                    <span className="text-sm text-slate-300">{option}</span>
+                  </label>
+                ))}
+                <div className="mt-2">
+                  <input 
+                    type="text" 
+                    placeholder="Other..."
+                    value={formData.otherChallenge}
+                    onChange={e => setFormData({...formData, otherChallenge: e.target.value})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">How long have these challenges been present? *</label>
+              <input 
+                type="text" 
+                value={formData.duration}
+                onChange={e => setFormData({...formData, duration: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+        );
+      case 4:
+        return (
+          <div className="space-y-4">
+            <h3 className="text-xl font-bold text-white">Background Information</h3>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Have you received any formal diagnosis?</label>
+              <textarea 
+                value={formData.formalDiagnosis}
+                onChange={e => setFormData({...formData, formalDiagnosis: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 min-h-[100px]"
+                placeholder="Please share if you feel comfortable doing so."
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Are you currently seeing a therapist or counselor? *</label>
+              <div className="space-y-2">
+                {["Yes", "No", "Looking for one or looking for a new one"].map(option => (
+                  <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                    <input 
+                      type="radio"
+                      name="therapist"
+                      checked={formData.seeingTherapist === option}
+                      onChange={() => setFormData({...formData, seeingTherapist: option})}
+                      className="w-4 h-4 border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                    />
+                    <span className="text-sm text-slate-300">{option}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      case 5:
+        return (
+          <div className="space-y-4">
+            <h3 className="text-xl font-bold text-white">Coaching Preferences</h3>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Is there anything important I should know about your strengths? *</label>
+              <textarea 
+                value={formData.strengths}
+                onChange={e => setFormData({...formData, strengths: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 min-h-[80px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Preferred session frequency: *</label>
+              <div className="grid grid-cols-2 gap-2">
+                {["Weekly", "Biweekly", "Monthly", "As needed basis"].map(option => (
+                  <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                    <input 
+                      type="radio"
+                      name="frequency"
+                      checked={formData.frequency === option}
+                      onChange={() => setFormData({...formData, frequency: option})}
+                      className="w-4 h-4 border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                    />
+                    <span className="text-sm text-slate-300">{option}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Any scheduling constraints? *</label>
+              <textarea 
+                value={formData.schedulingConstraints}
+                onChange={e => setFormData({...formData, schedulingConstraints: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 min-h-[80px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Is there anything else that you feel I should be aware of?</label>
+              <textarea 
+                value={formData.anythingElse}
+                onChange={e => setFormData({...formData, anythingElse: e.target.value})}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 min-h-[80px]"
+              />
+            </div>
+          </div>
+        );
+      case 6:
+        return (
+          <div className="space-y-6">
+            <h3 className="text-xl font-bold text-white">Legal Agreements</h3>
+            <div className="p-6 bg-slate-800/30 border border-slate-800 rounded-2xl space-y-4">
+              <p className="text-sm text-slate-400 leading-relaxed">
+                Please Note: Coaching is not therapy and is not a substitute for mental health treatment. If concerns arise that are outside the scope of coaching, referrals may be recommended.
+              </p>
+              <div className="space-y-3">
+                <label className="flex items-start gap-3 p-4 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                  <input 
+                    type="checkbox"
+                    checked={formData.agreedToTerms}
+                    onChange={e => setFormData({...formData, agreedToTerms: e.target.checked})}
+                    className="mt-1 w-5 h-5 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                  />
+                  <span className="text-sm text-slate-300">
+                    I have read and agree to the <a href="https://mrleeteaches.com/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:underline">Privacy Policy</a> and <a href="https://mrleeteaches.com/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:underline">Terms & Conditions</a>. *
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl"
+      >
+        <div className="p-8 md:p-12">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-3xl font-bold text-white mb-2">Welcome to Coaching</h2>
+              <p className="text-slate-400">Please complete your onboarding intake form.</p>
+            </div>
+            <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+              <FileCheck className="w-8 h-8" />
+            </div>
+          </div>
+
+          <div className="flex gap-2 mb-12">
+            {[1, 2, 3, 4, 5, 6].map(i => (
+              <div 
+                key={i} 
+                className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${i <= step ? 'bg-emerald-500' : 'bg-slate-800'}`}
+              />
+            ))}
+          </div>
+
+          <div className="min-h-[400px]">
+            {renderStep()}
+          </div>
+
+          <div className="flex gap-4 mt-12">
+            {step > 1 && (
+              <button 
+                onClick={() => setStep(step - 1)}
+                className="flex items-center gap-2 px-6 py-4 bg-slate-800 text-slate-300 rounded-2xl font-bold hover:bg-slate-700 transition-all"
+              >
+                <ArrowLeft className="w-5 h-5" /> Back
+              </button>
+            )}
+            {step < 6 ? (
+              <button 
+                disabled={!isStepValid()}
+                onClick={() => setStep(step + 1)}
+                className="flex-1 flex items-center justify-center gap-2 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 disabled:opacity-50 transition-all"
+              >
+                Next <ArrowRight className="w-5 h-5" />
+              </button>
+            ) : (
+              <button 
+                disabled={!isStepValid() || loading}
+                onClick={handleSubmit}
+                className="flex-1 flex items-center justify-center gap-2 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 disabled:opacity-50 transition-all"
+              >
+                {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
+                {loading ? 'Submitting...' : 'Complete Onboarding'}
+              </button>
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 function ClientsView({ clients, appointments, documents, role, selectedClient, setSelectedClient }: any) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [invitePhone, setInvitePhone] = useState('');
+  const [invitePassword, setInvitePassword] = useState('');
+  const [createdClientPassword, setCreatedClientPassword] = useState<string | null>(null);
+  const [inviteAge, setInviteAge] = useState('');
+  const [inviteEmergencyContactName, setInviteEmergencyContactName] = useState('');
+  const [inviteEmergencyContactPhone, setInviteEmergencyContactPhone] = useState('');
+  const [inviteFormalDiagnosis, setInviteFormalDiagnosis] = useState('');
+  const [inviteSchedulingConstraints, setInviteSchedulingConstraints] = useState('');
+  const [inviteParentName, setInviteParentName] = useState('');
+  const [inviteParentPhone, setInviteParentPhone] = useState('');
+  const [inviteParentEmail, setInviteParentEmail] = useState('');
+  const [inviteSecondaryParentName, setInviteSecondaryParentName] = useState('');
+  const [inviteSecondaryParentPhone, setInviteSecondaryParentPhone] = useState('');
+  const [inviteSecondaryParentEmail, setInviteSecondaryParentEmail] = useState('');
+  const [invitePreferredName, setInvitePreferredName] = useState('');
+  const [invitePrompt, setInvitePrompt] = useState('');
+  const [inviteChallenges, setInviteChallenges] = useState<string[]>([]);
+  const [inviteOtherChallenge, setInviteOtherChallenge] = useState('');
+  const [inviteDuration, setInviteDuration] = useState('');
+  const [inviteSeeingTherapist, setInviteSeeingTherapist] = useState('');
+  const [inviteStrengths, setInviteStrengths] = useState('');
+  const [inviteFrequency, setInviteFrequency] = useState('');
+  const [inviteAnythingElse, setInviteAnythingElse] = useState('');
+  const [showOnboardingFields, setShowOnboardingFields] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState<any>(null);
   const [isInviting, setIsInviting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
@@ -2276,27 +2893,126 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
     setIsInviting(true);
     setError(null);
     try {
+      const onboardingData: any = {};
+      if (showOnboardingFields) {
+        if (inviteAge) onboardingData.age = parseInt(inviteAge);
+        if (invitePreferredName) onboardingData.preferredName = invitePreferredName;
+        if (inviteEmergencyContactName) onboardingData.emergencyContactName = inviteEmergencyContactName;
+        if (inviteEmergencyContactPhone) onboardingData.emergencyContactPhone = inviteEmergencyContactPhone;
+        if (inviteFormalDiagnosis) onboardingData.formalDiagnosis = inviteFormalDiagnosis;
+        if (inviteSchedulingConstraints) onboardingData.schedulingConstraints = inviteSchedulingConstraints;
+        if (invitePrompt) onboardingData.prompt = invitePrompt;
+        if (inviteChallenges.length > 0) onboardingData.challenges = inviteChallenges;
+        if (inviteOtherChallenge) onboardingData.otherChallenge = inviteOtherChallenge;
+        if (inviteDuration) onboardingData.duration = inviteDuration;
+        if (inviteSeeingTherapist) onboardingData.seeingTherapist = inviteSeeingTherapist;
+        if (inviteStrengths) onboardingData.strengths = inviteStrengths;
+        if (inviteFrequency) onboardingData.frequency = inviteFrequency;
+        if (inviteAnythingElse) onboardingData.anythingElse = inviteAnythingElse;
+        if (inviteParentName) onboardingData.parentName = inviteParentName;
+        if (inviteParentPhone) onboardingData.parentPhone = inviteParentPhone;
+        if (inviteParentEmail) onboardingData.parentEmail = inviteParentEmail;
+        if (inviteSecondaryParentName) onboardingData.secondaryParentName = inviteSecondaryParentName;
+        if (inviteSecondaryParentPhone) onboardingData.secondaryParentPhone = inviteSecondaryParentPhone;
+        if (inviteSecondaryParentEmail) onboardingData.secondaryParentEmail = inviteSecondaryParentEmail;
+      }
+
       const response = await fetch('/api/admin/create-client', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: inviteEmail, displayName: inviteName, phone: invitePhone })
+        body: JSON.stringify({ 
+          email: inviteEmail, 
+          displayName: inviteName, 
+          phone: invitePhone,
+          password: invitePassword || undefined,
+          ...onboardingData
+        })
       });
 
+      const data = await response.json();
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.error || 'Failed to create client');
       }
 
-      setSuccessMessage(`Client ${inviteName} has been created and an invitation email with a temporary password has been sent to ${inviteEmail}.`);
+      setCreatedClientPassword(data.tempPassword);
+      setSuccessMessage(`Client ${inviteName} has been created. ${data.tempPassword ? `Temporary password: ${data.tempPassword}` : ''} An invitation email has also been sent to ${inviteEmail}.`);
       setInviteEmail('');
       setInviteName('');
       setInvitePhone('');
+      setInvitePassword('');
+      setInviteAge('');
+      setInviteEmergencyContactName('');
+      setInviteEmergencyContactPhone('');
+      setInviteFormalDiagnosis('');
+      setInviteSchedulingConstraints('');
+      setInviteParentName('');
+      setInviteParentPhone('');
+      setInviteParentEmail('');
+      setInviteSecondaryParentName('');
+      setInviteSecondaryParentPhone('');
+      setInviteSecondaryParentEmail('');
+      setInvitePreferredName('');
+      setInvitePrompt('');
+      setInviteChallenges([]);
+      setInviteOtherChallenge('');
+      setInviteDuration('');
+      setInviteSeeingTherapist('');
+      setInviteStrengths('');
+      setInviteFrequency('');
+      setInviteAnythingElse('');
+      setShowOnboardingFields(false);
       setShowInviteModal(false);
     } catch (err: any) {
       console.error('Invitation error:', err);
       setError(err.message);
     } finally {
       setIsInviting(false);
+    }
+  };
+
+  const handleUpdateClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editData) return;
+    setIsInviting(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/admin/update-client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editData)
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to update client');
+      }
+
+      setSuccessMessage('Client profile updated successfully.');
+      setIsEditing(false);
+      setEditData(null);
+    } catch (err: any) {
+      console.error('Update error:', err);
+      setError(err.message);
+    } finally {
+      setIsInviting(false);
+    }
+  };
+
+  const handleResendWelcome = async (uid: string) => {
+    try {
+      const response = await fetch('/api/admin/resend-welcome', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid })
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to resend email');
+      }
+      setSuccessMessage('Welcome email has been resent.');
+    } catch (err: any) {
+      console.error('Resend error:', err);
+      setError(err.message);
     }
   };
 
@@ -2413,7 +3129,7 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                 </div>
                 <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50">
                   <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Joined</p>
-                  <p className="text-sm font-bold text-white">{client.createdAt ? format(client.createdAt.toDate(), 'MMM yyyy') : 'N/A'}</p>
+                  <p className="text-sm font-bold text-white">{client.createdAt ? format(safeToDate(client.createdAt), 'MMM yyyy') : 'N/A'}</p>
                 </div>
               </div>
 
@@ -2425,7 +3141,31 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                   View Profile <ChevronRight className="w-4 h-4" />
                 </button>
                 <button 
-                  onClick={() => setClientToDelete(client)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditData({ ...client });
+                    setIsEditing(true);
+                  }}
+                  className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl hover:bg-emerald-500/20 transition-colors"
+                  title="Edit Profile"
+                >
+                  <Edit2 className="w-5 h-5" />
+                </button>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleResendWelcome(client.uid);
+                  }}
+                  className="p-3 bg-blue-500/10 text-blue-500 rounded-xl hover:bg-blue-500/20 transition-colors"
+                  title="Resend Welcome Email"
+                >
+                  <Mail className="w-5 h-5" />
+                </button>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setClientToDelete(client);
+                  }}
                   className="p-3 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500/20 transition-colors"
                   title="Delete Client"
                 >
@@ -2436,6 +3176,329 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
           );
         })}
       </div>
+
+      {/* Edit Client Modal */}
+      <AnimatePresence>
+        {isEditing && editData && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isInviting && setIsEditing(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl max-h-[90vh] overflow-y-auto"
+            >
+              <h3 className="text-2xl font-bold text-white mb-2">Edit Client Profile</h3>
+              <p className="text-slate-400 mb-6">Update client information and onboarding data.</p>
+              
+              {error && (
+                <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm whitespace-pre-wrap">
+                  {error}
+                </div>
+              )}
+
+              <form onSubmit={handleUpdateClient} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Full Name</label>
+                    <input 
+                      type="text" 
+                      required
+                      value={editData.displayName || ''}
+                      onChange={(e) => setEditData({ ...editData, displayName: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Email Address (Read Only)</label>
+                    <input 
+                      type="email" 
+                      disabled
+                      value={editData.email || ''}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-slate-400 cursor-not-allowed"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Phone Number</label>
+                  <input 
+                    type="tel" 
+                    value={editData.phoneNumber || ''}
+                    onChange={(e) => setEditData({ ...editData, phoneNumber: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-slate-800">
+                  <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-6">Onboarding Information</h4>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Age</label>
+                        <input 
+                          type="number" 
+                          value={editData.age || ''}
+                          onChange={(e) => setEditData({ ...editData, age: parseInt(e.target.value) || '' })}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Preferred Name</label>
+                        <input 
+                          type="text" 
+                          value={editData.preferredName || ''}
+                          onChange={(e) => setEditData({ ...editData, preferredName: e.target.value })}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Emergency Contact Name</label>
+                        <input 
+                          type="text" 
+                          value={editData.emergencyContactName || ''}
+                          onChange={(e) => setEditData({ ...editData, emergencyContactName: e.target.value })}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Emergency Contact Phone</label>
+                        <input 
+                          type="tel" 
+                          value={editData.emergencyContactPhone || ''}
+                          onChange={(e) => setEditData({ ...editData, emergencyContactPhone: e.target.value })}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">What prompted you to seek support right now?</label>
+                      <textarea 
+                        value={editData.prompt || ''}
+                        onChange={(e) => setEditData({ ...editData, prompt: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Current Challenges</label>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {[
+                          "Homework initiation",
+                          "Organization / losing materials",
+                          "Time management",
+                          "Emotional shutdown",
+                          "School/Work Avoidance",
+                          "Transitions",
+                          "Follow-through"
+                        ].map(option => (
+                          <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                            <input 
+                              type="checkbox"
+                              checked={(editData.challenges || []).includes(option)}
+                              onChange={() => {
+                                const current = editData.challenges || [];
+                                const next = current.includes(option) ? current.filter((c: string) => c !== option) : [...current, option];
+                                setEditData({ ...editData, challenges: next });
+                              }}
+                              className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                            />
+                            <span className="text-sm text-slate-300">{option}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <input 
+                        type="text" 
+                        placeholder="Other..."
+                        value={editData.otherChallenge || ''}
+                        onChange={e => setEditData({ ...editData, otherChallenge: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 mt-2"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">How long have these challenges been present?</label>
+                      <input 
+                        type="text" 
+                        value={editData.duration || ''}
+                        onChange={(e) => setEditData({ ...editData, duration: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Formal Diagnosis</label>
+                      <textarea 
+                        value={editData.formalDiagnosis || ''}
+                        onChange={(e) => setEditData({ ...editData, formalDiagnosis: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Are you currently seeing a therapist or counselor?</label>
+                      <div className="space-y-2">
+                        {["Yes", "No", "Looking for one or looking for a new one"].map(option => (
+                          <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                            <input 
+                              type="radio"
+                              name="editTherapist"
+                              checked={editData.seeingTherapist === option}
+                              onChange={() => setEditData({ ...editData, seeingTherapist: option })}
+                              className="w-4 h-4 border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                            />
+                            <span className="text-sm text-slate-300">{option}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Important info about strengths</label>
+                      <textarea 
+                        value={editData.strengths || ''}
+                        onChange={(e) => setEditData({ ...editData, strengths: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Preferred session frequency</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {["Weekly", "Biweekly", "Monthly", "As needed basis"].map(option => (
+                          <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                            <input 
+                              type="radio"
+                              name="editFrequency"
+                              checked={editData.frequency === option}
+                              onChange={() => setEditData({ ...editData, frequency: option })}
+                              className="w-4 h-4 border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                            />
+                            <span className="text-sm text-slate-300">{option}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Scheduling Constraints</label>
+                      <textarea 
+                        value={editData.schedulingConstraints || ''}
+                        onChange={(e) => setEditData({ ...editData, schedulingConstraints: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Anything else?</label>
+                      <textarea 
+                        value={editData.anythingElse || ''}
+                        onChange={(e) => setEditData({ ...editData, anythingElse: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                      />
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-800">
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Parent/Guardian Info (For Minors)</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Parent Name</label>
+                          <input 
+                            type="text" 
+                            value={editData.parentName || ''}
+                            onChange={(e) => setEditData({ ...editData, parentName: e.target.value })}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Parent Phone</label>
+                          <input 
+                            type="tel" 
+                            value={editData.parentPhone || ''}
+                            onChange={(e) => setEditData({ ...editData, parentPhone: e.target.value })}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-4">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Parent Email</label>
+                        <input 
+                          type="email" 
+                          value={editData.parentEmail || ''}
+                          onChange={(e) => setEditData({ ...editData, parentEmail: e.target.value })}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+
+                      <div className="pt-4 mt-4 border-t border-slate-800/50">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Secondary Parent/Guardian (Optional)</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Name</label>
+                            <input 
+                              type="text" 
+                              value={editData.secondaryParentName || ''}
+                              onChange={(e) => setEditData({ ...editData, secondaryParentName: e.target.value })}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Phone</label>
+                            <input 
+                              type="tel" 
+                              value={editData.secondaryParentPhone || ''}
+                              onChange={(e) => setEditData({ ...editData, secondaryParentPhone: e.target.value })}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-4">
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Email</label>
+                          <input 
+                            type="email" 
+                            value={editData.secondaryParentEmail || ''}
+                            onChange={(e) => setEditData({ ...editData, secondaryParentEmail: e.target.value })}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    type="button"
+                    disabled={isInviting}
+                    onClick={() => setIsEditing(false)}
+                    className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isInviting}
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isInviting ? <Clock className="w-4 h-4 animate-spin" /> : null}
+                    {isInviting ? 'Saving Changes...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
@@ -2503,8 +3566,22 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
               </div>
               <h3 className="text-xl font-bold text-white mb-2">Success</h3>
               <p className="text-slate-400 mb-8">{successMessage}</p>
+              {createdClientPassword && (
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdClientPassword);
+                    alert('Password copied to clipboard!');
+                  }}
+                  className="w-full py-3 mb-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Share2 className="w-4 h-4" /> Copy Password
+                </button>
+              )}
               <button 
-                onClick={() => setSuccessMessage(null)}
+                onClick={() => {
+                  setSuccessMessage(null);
+                  setCreatedClientPassword(null);
+                }}
                 className="w-full py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-500 transition-colors"
               >
                 Continue
@@ -2535,11 +3612,26 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                 <div className="w-20 h-20 rounded-3xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 font-bold text-3xl">
                   {selectedClient.displayName?.[0] || '?'}
                 </div>
-                <div>
-                  <h3 className="text-2xl font-bold text-white">{selectedClient.displayName}</h3>
+                <div className="flex-1">
+                  <h3 className="text-2xl font-bold text-white">
+                    {selectedClient.displayName}
+                    {selectedClient.preferredName && (
+                      <span className="text-slate-500 font-normal ml-2 text-lg">({selectedClient.preferredName})</span>
+                    )}
+                  </h3>
                   <p className="text-slate-400">{selectedClient.email}</p>
                   {selectedClient.phone && <p className="text-slate-400 text-sm mt-1">{selectedClient.phone}</p>}
                 </div>
+                <button 
+                  onClick={() => {
+                    setEditData({ ...selectedClient });
+                    setIsEditing(true);
+                    setSelectedClient(null);
+                  }}
+                  className="p-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 transition-colors flex items-center gap-2"
+                >
+                  <Edit2 className="w-4 h-4" /> Edit
+                </button>
               </div>
 
               <div className="grid grid-cols-2 gap-4 mb-8">
@@ -2550,18 +3642,121 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                 <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50">
                   <p className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-1">Joined</p>
                   <p className="text-white font-medium">
-                    {selectedClient.createdAt ? format(selectedClient.createdAt.toDate(), 'MMMM d, yyyy') : 'N/A'}
+                    {selectedClient.createdAt ? format(safeToDate(selectedClient.createdAt), 'MMMM d, yyyy') : 'N/A'}
                   </p>
                 </div>
               </div>
+
+              {selectedClient.isOnboarded && (
+                <div className="mb-8 space-y-6">
+                  <h4 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Onboarding Information</h4>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Age</p>
+                        <p className="text-white font-medium">{selectedClient.age || 'N/A'}</p>
+                      </div>
+                      <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Preferred Name</p>
+                        <p className="text-white font-medium">{selectedClient.preferredName || 'None'}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Emergency Contact</p>
+                      <p className="text-white font-medium">{selectedClient.emergencyContactName || 'N/A'}</p>
+                      <p className="text-xs text-slate-400">{selectedClient.emergencyContactPhone}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">What prompted seeking support?</p>
+                      <p className="text-white text-sm whitespace-pre-wrap">{selectedClient.prompt || 'None shared'}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Current Challenges</p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {(selectedClient.challenges || []).map((c: string) => (
+                          <span key={c} className="px-2 py-1 bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase rounded-md border border-emerald-500/20">
+                            {c}
+                          </span>
+                        ))}
+                        {selectedClient.otherChallenge && (
+                          <span className="px-2 py-1 bg-slate-500/10 text-slate-400 text-[10px] font-bold uppercase rounded-md border border-slate-500/20">
+                            Other: {selectedClient.otherChallenge}
+                          </span>
+                        )}
+                        {(!selectedClient.challenges?.length && !selectedClient.otherChallenge) && (
+                          <p className="text-white text-sm">None shared</p>
+                        )}
+                      </div>
+                      {selectedClient.duration && (
+                        <p className="text-xs text-slate-500 mt-2 italic">Duration: {selectedClient.duration}</p>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Formal Diagnosis</p>
+                      <p className="text-white text-sm whitespace-pre-wrap">{selectedClient.formalDiagnosis || 'None shared'}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Currently Seeing Therapist?</p>
+                      <p className="text-white text-sm">{selectedClient.seeingTherapist || 'None shared'}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Strengths</p>
+                      <p className="text-white text-sm whitespace-pre-wrap">{selectedClient.strengths || 'None shared'}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Preferred Frequency</p>
+                      <p className="text-white text-sm">{selectedClient.frequency || 'None shared'}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Scheduling Constraints</p>
+                      <p className="text-white text-sm whitespace-pre-wrap">{selectedClient.schedulingConstraints || 'None shared'}</p>
+                    </div>
+
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Anything Else?</p>
+                      <p className="text-white text-sm whitespace-pre-wrap">{selectedClient.anythingElse || 'None shared'}</p>
+                    </div>
+                  </div>
+
+                  {selectedClient.parentName && (
+                    <div className="bg-slate-800/30 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-2">Parent/Guardian Information</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-xs text-slate-500 font-bold uppercase tracking-tighter">Primary</p>
+                          <p className="text-white font-medium">{selectedClient.parentName}</p>
+                          <p className="text-xs text-slate-400">{selectedClient.parentPhone}</p>
+                          <p className="text-xs text-slate-400">{selectedClient.parentEmail}</p>
+                        </div>
+                        {selectedClient.secondaryParentName && (
+                          <div>
+                            <p className="text-xs text-slate-500 font-bold uppercase tracking-tighter">Secondary</p>
+                            <p className="text-white font-medium">{selectedClient.secondaryParentName}</p>
+                            <p className="text-xs text-slate-400">{selectedClient.secondaryParentPhone}</p>
+                            <p className="text-xs text-slate-400">{selectedClient.secondaryParentEmail}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-6 mb-8">
                 <div>
                   <h4 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">Upcoming Appointments</h4>
                   <div className="space-y-3">
                     {appointments
-                      .filter((a: any) => a.clientEmail === selectedClient.email && isAfter(a.startTime.toDate(), new Date()))
-                      .sort((a: any, b: any) => a.startTime.toDate().getTime() - b.startTime.toDate().getTime())
+                      .filter((a: any) => a.clientEmail === selectedClient.email && isAfter(safeToDate(a.startTime), new Date()))
+                      .sort((a: any, b: any) => safeToDate(a.startTime).getTime() - safeToDate(b.startTime).getTime())
                       .map((appt: any) => (
                         <div key={appt.id} className="bg-slate-800/20 rounded-2xl border border-slate-800 p-4 flex items-center justify-between">
                           <div className="flex items-center gap-4">
@@ -2570,7 +3765,7 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                             </div>
                             <div>
                               <p className="text-white font-medium">{appt.title}</p>
-                              <p className="text-xs text-slate-500">{format(appt.startTime.toDate(), 'MMM d, yyyy • h:mm a')}</p>
+                              <p className="text-xs text-slate-500">{format(safeToDate(appt.startTime), 'MMM d, yyyy • h:mm a')}</p>
                             </div>
                           </div>
                           <div className="flex flex-col items-end gap-2">
@@ -2586,7 +3781,7 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                           </div>
                         </div>
                       ))}
-                    {appointments.filter((a: any) => a.clientEmail === selectedClient.email && isAfter(a.startTime.toDate(), new Date())).length === 0 && (
+                    {appointments.filter((a: any) => a.clientEmail === selectedClient.email && isAfter(safeToDate(a.startTime), new Date())).length === 0 && (
                       <div className="text-center py-6 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
                         <p className="text-slate-500 text-sm">No upcoming appointments.</p>
                       </div>
@@ -2598,8 +3793,8 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                   <h4 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">Recent Sessions</h4>
                   <div className="space-y-3">
                     {appointments
-                      .filter((a: any) => a.clientEmail === selectedClient.email && isBefore(a.startTime.toDate(), new Date()))
-                      .sort((a: any, b: any) => b.startTime.toDate().getTime() - a.startTime.toDate().getTime())
+                      .filter((a: any) => a.clientEmail === selectedClient.email && isBefore(safeToDate(a.startTime), new Date()))
+                      .sort((a: any, b: any) => safeToDate(b.startTime).getTime() - safeToDate(a.startTime).getTime())
                       .slice(0, 5)
                       .map((appt: any) => (
                         <div key={appt.id} className="bg-slate-800/20 rounded-2xl border border-slate-800 p-4 flex items-center justify-between">
@@ -2609,13 +3804,13 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                             </div>
                             <div>
                               <p className="text-white font-medium">{appt.title}</p>
-                              <p className="text-xs text-slate-500">{format(appt.startTime.toDate(), 'MMM d, yyyy')}</p>
+                              <p className="text-xs text-slate-500">{format(safeToDate(appt.startTime), 'MMM d, yyyy')}</p>
                             </div>
                           </div>
                           <Badge variant="default">Completed</Badge>
                         </div>
                       ))}
-                    {appointments.filter((a: any) => a.clientEmail === selectedClient.email && isBefore(a.startTime.toDate(), new Date())).length === 0 && (
+                    {appointments.filter((a: any) => a.clientEmail === selectedClient.email && isBefore(safeToDate(a.startTime), new Date())).length === 0 && (
                       <div className="text-center py-6 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
                         <p className="text-slate-500 text-sm">No past sessions found.</p>
                       </div>
@@ -2636,7 +3831,7 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                             </div>
                             <div>
                               <p className="text-white font-medium">{doc.name}</p>
-                              <p className="text-xs text-slate-500">{format(doc.createdAt.toDate(), 'MMM d, yyyy')}</p>
+                              <p className="text-xs text-slate-500">{format(safeToDate(doc.createdAt), 'MMM d, yyyy')}</p>
                             </div>
                           </div>
                           <a 
@@ -2697,7 +3892,7 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl"
+              className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl max-h-[90vh] overflow-y-auto"
             >
               <h3 className="text-2xl font-bold text-white mb-2">Add New Client</h3>
               <p className="text-slate-400 mb-6">Create a client account and send login credentials.</p>
@@ -2708,40 +3903,309 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                 </div>
               )}
 
-              <form onSubmit={handleInvite} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Full Name</label>
-                  <input 
-                    type="text" 
-                    required
-                    value={inviteName}
-                    onChange={(e) => setInviteName(e.target.value)}
-                    placeholder="John Doe"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
+              <form onSubmit={handleInvite} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Full Name *</label>
+                    <input 
+                      type="text" 
+                      required
+                      value={inviteName}
+                      onChange={(e) => setInviteName(e.target.value)}
+                      placeholder="John Doe"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Email Address *</label>
+                    <input 
+                      type="email" 
+                      required
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      placeholder="client@example.com"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Email Address</label>
-                  <input 
-                    type="email" 
-                    required
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="client@example.com"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Phone Number (Optional)</label>
+                    <input 
+                      type="tel" 
+                      value={invitePhone}
+                      onChange={(e) => setInvitePhone(e.target.value)}
+                      placeholder="864-209-1043"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Password (Optional)</label>
+                    <input 
+                      type="text" 
+                      value={invitePassword}
+                      onChange={(e) => setInvitePassword(e.target.value)}
+                      placeholder="Leave blank to auto-generate"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Phone Number (Optional)</label>
-                  <input 
-                    type="tel" 
-                    value={invitePhone}
-                    onChange={(e) => setInvitePhone(e.target.value)}
-                    placeholder="864-209-1043"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-2 ml-1">Format: 10 digits (e.g. 8642091043) or include country code (e.g. +1...)</p>
+
+                <div className="pt-4 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowOnboardingFields(!showOnboardingFields)}
+                    className="flex items-center gap-2 text-emerald-500 font-bold text-sm hover:text-emerald-400 transition-colors"
+                  >
+                    {showOnboardingFields ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    {showOnboardingFields ? 'Hide Onboarding Fields' : 'Pre-fill Onboarding Data (Optional)'}
+                  </button>
+
+                  {showOnboardingFields && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="space-y-4 mt-6"
+                    >
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Age</label>
+                          <input 
+                            type="number" 
+                            value={inviteAge}
+                            onChange={(e) => setInviteAge(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Preferred Name</label>
+                          <input 
+                            type="text" 
+                            value={invitePreferredName}
+                            onChange={(e) => setInvitePreferredName(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Emergency Contact Name</label>
+                          <input 
+                            type="text" 
+                            value={inviteEmergencyContactName}
+                            onChange={(e) => setInviteEmergencyContactName(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Emergency Contact Phone</label>
+                          <input 
+                            type="tel" 
+                            value={inviteEmergencyContactPhone}
+                            onChange={(e) => setInviteEmergencyContactPhone(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">What prompted you to seek support right now?</label>
+                        <textarea 
+                          value={invitePrompt}
+                          onChange={(e) => setInvitePrompt(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Current Challenges</label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {[
+                            "Homework initiation",
+                            "Organization / losing materials",
+                            "Time management",
+                            "Emotional shutdown",
+                            "School/Work Avoidance",
+                            "Transitions",
+                            "Follow-through"
+                          ].map(option => (
+                            <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                              <input 
+                                type="checkbox"
+                                checked={inviteChallenges.includes(option)}
+                                onChange={() => {
+                                  setInviteChallenges(prev => 
+                                    prev.includes(option) ? prev.filter(c => c !== option) : [...prev, option]
+                                  );
+                                }}
+                                className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                              />
+                              <span className="text-sm text-slate-300">{option}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Other..."
+                          value={inviteOtherChallenge}
+                          onChange={e => setInviteOtherChallenge(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 mt-2"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">How long have these challenges been present?</label>
+                        <input 
+                          type="text" 
+                          value={inviteDuration}
+                          onChange={(e) => setInviteDuration(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Formal Diagnosis</label>
+                        <textarea 
+                          value={inviteFormalDiagnosis}
+                          onChange={(e) => setInviteFormalDiagnosis(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Are you currently seeing a therapist or counselor?</label>
+                        <div className="space-y-2">
+                          {["Yes", "No", "Looking for one or looking for a new one"].map(option => (
+                            <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                              <input 
+                                type="radio"
+                                name="inviteTherapist"
+                                checked={inviteSeeingTherapist === option}
+                                onChange={() => setInviteSeeingTherapist(option)}
+                                className="w-4 h-4 border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                              />
+                              <span className="text-sm text-slate-300">{option}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Important info about strengths</label>
+                        <textarea 
+                          value={inviteStrengths}
+                          onChange={(e) => setInviteStrengths(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Preferred session frequency</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {["Weekly", "Biweekly", "Monthly", "As needed basis"].map(option => (
+                            <label key={option} className="flex items-center gap-3 p-3 bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors">
+                              <input 
+                                type="radio"
+                                name="inviteFrequency"
+                                checked={inviteFrequency === option}
+                                onChange={() => setInviteFrequency(option)}
+                                className="w-4 h-4 border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900"
+                              />
+                              <span className="text-sm text-slate-300">{option}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Scheduling Constraints</label>
+                        <textarea 
+                          value={inviteSchedulingConstraints}
+                          onChange={(e) => setInviteSchedulingConstraints(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Anything else?</label>
+                        <textarea 
+                          value={inviteAnythingElse}
+                          onChange={(e) => setInviteAnythingElse(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                        />
+                      </div>
+
+                      <div className="pt-4 border-t border-slate-800">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Parent/Guardian Info (For Minors)</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Parent Name</label>
+                            <input 
+                              type="text" 
+                              value={inviteParentName}
+                              onChange={(e) => setInviteParentName(e.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Parent Phone</label>
+                            <input 
+                              type="tel" 
+                              value={inviteParentPhone}
+                              onChange={(e) => setInviteParentPhone(e.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-4">
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Parent Email</label>
+                          <input 
+                            type="email" 
+                            value={inviteParentEmail}
+                            onChange={(e) => setInviteParentEmail(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+
+                        <div className="pt-4 mt-4 border-t border-slate-800/50">
+                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Secondary Parent/Guardian (Optional)</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Name</label>
+                              <input 
+                                type="text" 
+                                value={inviteSecondaryParentName}
+                                onChange={(e) => setInviteSecondaryParentName(e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Phone</label>
+                              <input 
+                                type="tel" 
+                                value={inviteSecondaryParentPhone}
+                                onChange={(e) => setInviteSecondaryParentPhone(e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-4">
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Email</label>
+                            <input 
+                              type="email" 
+                              value={inviteSecondaryParentEmail}
+                              onChange={(e) => setInviteSecondaryParentEmail(e.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
                 </div>
+
                 <div className="flex gap-3 pt-4">
                   <button 
                     type="button"
@@ -3148,7 +4612,7 @@ function DocumentsView({ documents, role, user }: any) {
             <p className="text-xs text-slate-500 mb-4">Shared with: {doc.sharedWithEmail}</p>
             <div className="flex items-center justify-between pt-4 border-t border-slate-800">
               <span className="text-[10px] text-slate-600 uppercase font-bold tracking-widest">
-                {format(doc.createdAt.toDate(), 'MMM d, yyyy')}
+                {format(safeToDate(doc.createdAt), 'MMM d, yyyy')}
               </span>
               <Badge variant="default">PDF / Doc</Badge>
             </div>
@@ -3168,7 +4632,7 @@ function DocumentsView({ documents, role, user }: any) {
 function RemindersView({ appointments, role, notificationPermission, onRequestNotifications }: any) {
   const upcomingReminders = useMemo(() => {
     return appointments
-      .filter((a: any) => a.status === 'scheduled' && isAfter(a.startTime.toDate(), new Date()))
+      .filter((a: any) => a.status === 'scheduled' && isAfter(safeToDate(a.startTime), new Date()))
       .slice(0, 10);
   }, [appointments]);
 
@@ -3231,7 +4695,7 @@ function RemindersView({ appointments, role, notificationPermission, onRequestNo
                 <div key={appt.id} className="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h5 className="font-bold text-white">{appt.title}</h5>
-                    <span className="text-xs text-slate-500">{format(appt.startTime.toDate(), 'MMM d, h:mm a')}</span>
+                    <span className="text-xs text-slate-500">{format(safeToDate(appt.startTime), 'MMM d, h:mm a')}</span>
                   </div>
                   <div className="flex gap-3">
                     <div className={cn(

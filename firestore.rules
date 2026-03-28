@@ -85,7 +85,8 @@ service cloud.firestore {
 
     function isCoach() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'coach' ||
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'coach') ||
          (request.auth.token.email == "msustewart@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -114,14 +115,11 @@ service cloud.firestore {
     // ===============================================================
 
     function isValidUser(data, uid) {
+      // Basic required fields
       return data.keys().hasAll(['uid', 'email', 'role']) &&
-             hasOnlyAllowedFields(['uid', 'email', 'displayName', 'phone', 'role', 'createdAt', 'mustChangePassword', 'photoURL', 'reminderTemplate']) &&
              data.uid == uid &&
-             data.email is string && isValidEmail(data.email) &&
-             data.role in ['coach', 'client'] &&
-             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
-             (!('phone' in data) || (data.phone is string && data.phone.size() < 20)) &&
-             (!('mustChangePassword' in data) || data.mustChangePassword is bool);
+             data.email is string &&
+             data.role in ['coach', 'client'];
     }
 
     function isValidAppointment(data) {
@@ -190,8 +188,8 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{uid} {
-      // Coaches can read all users (to see clients). Clients can only read themselves.
-      allow read: if isAuthenticated() && (isOwner(uid) || isCoach());
+      // Coaches can read all users. Clients can read themselves and the coach profile.
+      allow read: if isAuthenticated() && (isOwner(uid) || isCoach() || resource.data.email == "msustewart@gmail.com");
       
       // On create:
       // 1. User must be authenticated and owner of the document.
@@ -200,10 +198,12 @@ service cloud.firestore {
                     (request.resource.data.role == 'client' || request.auth.token.email == "msustewart@gmail.com");
       
       // On update:
-      // 1. Owner can update their own profile but CANNOT change their role.
+      // 1. Owner can update their own profile but CANNOT change their role or uid.
       // 2. Coach can update client profiles.
       allow update: if isAuthenticated() && 
-                    ((isOwner(uid) && isValidUser(request.resource.data, uid) && request.resource.data.role == resource.data.role) || 
+                    ((isOwner(uid) && 
+                      request.resource.data.role == resource.data.role && 
+                      request.resource.data.uid == resource.data.uid) || 
                      isCoach());
     }
 

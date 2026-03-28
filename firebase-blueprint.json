@@ -12,6 +12,18 @@
         "phone": { "type": "string", "description": "User's phone number" },
         "role": { "type": "string", "enum": ["coach", "client"], "description": "User's role" },
         "isActive": { "type": "boolean", "description": "Whether the client is currently active" },
+        "isOnboarded": { "type": "boolean", "description": "Whether the client has completed onboarding" },
+        "age": { "type": "number", "description": "User's age" },
+        "emergencyContactName": { "type": "string", "description": "Emergency contact name" },
+        "emergencyContactPhone": { "type": "string", "description": "Emergency contact phone number" },
+        "formalDiagnosis": { "type": "string", "description": "User's formal diagnosis" },
+        "schedulingConstraints": { "type": "string", "description": "User's scheduling constraints" },
+        "parentName": { "type": "string", "description": "Parent/Guardian Name" },
+        "parentPhone": { "type": "string", "description": "Parent/Guardian Phone" },
+        "parentEmail": { "type": "string", "description": "Parent/Guardian Email" },
+        "secondaryParentName": { "type": "string", "description": "Secondary Parent/Guardian Name" },
+        "secondaryParentPhone": { "type": "string", "description": "Secondary Parent/Guardian Phone" },
+        "secondaryParentEmail": { "type": "string", "description": "Secondary Parent/Guardian Email" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Account creation time" },
         "reminderTemplate": { "type": "string", "description": "Custom reminder email template" }
       },
@@ -89,6 +101,21 @@
         "metadata": { "type": "object", "description": "Optional metadata (e.g., document info)" }
       },
       "required": ["senderUid", "receiverUid", "content", "createdAt", "isRead", "type"]
+    },
+    "PrivateNote": {
+      "title": "Private Note",
+      "description": "Metadata for a private session note stored in Google Drive.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Note title" },
+        "driveFileId": { "type": "string", "description": "Google Drive File ID" },
+        "webViewLink": { "type": "string", "format": "uri", "description": "Link to the Google Doc" },
+        "clientUid": { "type": "string", "description": "Client's UID" },
+        "coachUid": { "type": "string", "description": "Coach's UID" },
+        "appointmentId": { "type": "string", "description": "Optional associated appointment ID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation time" }
+      },
+      "required": ["title", "driveFileId", "webViewLink", "clientUid", "coachUid", "createdAt"]
     }
   },
   "firestore": {
@@ -115,6 +142,10 @@
     "/messages/{messageId}": {
       "schema": "Message",
       "description": "2-way messaging between coach and client"
+    },
+    "/private_notes/{noteId}": {
+      "schema": "PrivateNote",
+      "description": "Metadata for private session notes in Drive"
     }
   }
 }

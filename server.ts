@@ -10,8 +10,11 @@ import { getAuth } from "firebase-admin/auth";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import { Readable } from "stream";
 
 dotenv.config();
+console.log("DEBUG: SMTP_USER is", process.env.SMTP_USER ? "SET" : "NOT SET");
+console.log("DEBUG: APP_URL is", process.env.APP_URL || "NOT SET");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,7 +76,13 @@ async function startServer() {
   // Force HTTPS redirect for custom domains
   app.use((req, res, next) => {
     if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https") {
-      return res.redirect(`https://${req.headers.host}${req.url}`);
+      // Use APP_URL if available to avoid redirecting to localhost if the proxy is misconfigured
+      const host = process.env.APP_URL ? new URL(process.env.APP_URL).host : req.headers.host;
+      
+      // Safety check: never redirect to localhost in production
+      if (host && !host.includes('localhost')) {
+        return res.redirect(`https://${host}${req.url}`);
+      }
     }
     next();
   });
@@ -430,6 +439,113 @@ async function startServer() {
     }
   });
 
+  app.post("/api/onboarding/submit", async (req, res) => {
+    const { clientUid, onboardingData, pdfBase64 } = req.body;
+
+    if (!clientUid || !onboardingData || !pdfBase64) {
+      return res.status(400).json({ error: "Missing required fields." });
+    }
+
+    try {
+      const driveClient = await getDriveClient();
+      const rootFolderId = process.env.GOOGLE_DRIVE_PRIVATE_NOTES_ROOT_FOLDER_ID;
+
+      if (!rootFolderId) {
+        throw new Error("Private notes root folder ID not configured.");
+      }
+
+      // 1. Update User Profile in Firestore
+      const userRef = db.collection("users").doc(clientUid);
+      await userRef.update({
+        isOnboarded: true,
+        phone: onboardingData.phone || "",
+        preferredName: onboardingData.preferredName || "",
+        age: Number(onboardingData.age) || 0,
+        emergencyContactName: onboardingData.emergencyContactName || "",
+        emergencyContactPhone: onboardingData.emergencyContactPhone || "",
+        prompt: onboardingData.prompt || "",
+        challenges: onboardingData.challenges || [],
+        otherChallenge: onboardingData.otherChallenge || "",
+        duration: onboardingData.duration || "",
+        formalDiagnosis: onboardingData.formalDiagnosis || "",
+        seeingTherapist: onboardingData.seeingTherapist || "",
+        strengths: onboardingData.strengths || "",
+        frequency: onboardingData.frequency || "",
+        schedulingConstraints: onboardingData.schedulingConstraints || "",
+        anythingElse: onboardingData.anythingElse || "",
+        parentName: onboardingData.parentName || "",
+        parentPhone: onboardingData.parentPhone || "",
+        parentEmail: onboardingData.parentEmail || "",
+        secondaryParentName: onboardingData.secondaryParentName || "",
+        secondaryParentPhone: onboardingData.secondaryParentPhone || "",
+        secondaryParentEmail: onboardingData.secondaryParentEmail || "",
+        onboardingData: onboardingData
+      });
+
+      // 2. Find or create client private folder
+      const clientDoc = await userRef.get();
+      const clientName = clientDoc.data()!.displayName;
+
+      let clientFolderId: string;
+      const folderSearch = await driveClient.files.list({
+        auth: oauth2Client,
+        q: `'${rootFolderId}' in parents and name = '${clientName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id)'
+      });
+
+      if (folderSearch.data.files && folderSearch.data.files.length > 0) {
+        clientFolderId = folderSearch.data.files[0].id!;
+      } else {
+        const newFolder = await driveClient.files.create({
+          auth: oauth2Client,
+          requestBody: {
+            name: clientName,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [rootFolderId]
+          },
+          fields: 'id'
+        });
+        clientFolderId = newFolder.data.id!;
+      }
+
+      // 3. Upload PDF to Drive
+      const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+      const media = {
+        mimeType: 'application/pdf',
+        body: Readable.from(pdfBuffer)
+      };
+
+      const file = await driveClient.files.create({
+        auth: oauth2Client,
+        requestBody: {
+          name: `Onboarding Intake Form - ${clientName}.pdf`,
+          parents: [clientFolderId]
+        },
+        media: media,
+        fields: 'id, name, webViewLink'
+      });
+
+      // 4. Find Coach UID
+      const coachSnapshot = await db.collection("users").where("role", "==", "coach").limit(1).get();
+      const coachUid = coachSnapshot.empty ? "SYSTEM" : coachSnapshot.docs[0].id;
+
+      // 5. Save metadata to private_notes collection
+      await db.collection("private_notes").add({
+        title: `Onboarding Intake Form - ${clientName}`,
+        driveFileId: file.data.id,
+        webViewLink: file.data.webViewLink,
+        clientUid: clientUid,
+        coachUid: coachUid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Onboarding submission error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   async function getGoogleAuthClient() {
     if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
       throw new Error("Google Service Account credentials missing in environment variables.");
@@ -544,7 +660,9 @@ TO FIX THIS:
 
   // --- Admin: Create Client Manually ---
   app.post("/api/admin/create-client", async (req, res) => {
-    const { email, displayName, phone } = req.body;
+    const { email, displayName, phone, password: customPassword, ...onboardingInfo } = req.body;
+    
+    console.log(`DEBUG: create-client request for ${email}`);
     
     if (!email || !displayName) {
       return res.status(400).json({ error: "Email and display name are required." });
@@ -566,23 +684,38 @@ TO FIX THIS:
     }
 
     try {
-      // Generate a temporary password
-      const tempPassword = Math.random().toString(36).slice(-10) + "!";
-      
-      console.log(`Attempting to create user in Auth: ${email} (Project: ${admin.app().options.projectId || firebaseConfig.projectId})`);
+      // Check if user already exists in Auth
+      let userRecord;
+      let tempPassword = customPassword || null;
+      try {
+        userRecord = await admin.auth().getUserByEmail(email);
+        console.log(`DEBUG: User already exists in Auth: ${userRecord.uid}`);
+      } catch (e: any) {
+        if (e.code === 'auth/user-not-found') {
+          // Create new user with temporary password
+          if (!tempPassword) {
+            tempPassword = Math.random().toString(36).slice(-10) + "A1!";
+          }
+          console.log(`Attempting to create user in Auth: ${email}`);
+          userRecord = await admin.auth().createUser({
+            email,
+            displayName,
+            password: tempPassword,
+            phoneNumber: formattedPhone
+          });
+          console.log(`DEBUG: Successfully created Auth user: ${userRecord.uid}`);
+        } else {
+          console.error("DEBUG: Error checking for existing user:", e);
+          throw e;
+        }
+      }
 
-      // Create user in Firebase Auth
-      const userRecord = await admin.auth().createUser({
-        email,
-        displayName,
-        password: tempPassword,
-        phoneNumber: formattedPhone
-      });
+      // Determine if onboarded based on provided info
+      const hasOnboardingData = onboardingInfo && Object.keys(onboardingInfo).length > 0;
 
-      console.log(`Successfully created Auth user: ${userRecord.uid}`);
-
-      // Create user profile in Firestore
+      // Create or update Firestore profile
       await db.collection("users").doc(userRecord.uid).set({
+        ...onboardingInfo,
         uid: userRecord.uid,
         email: email.toLowerCase(),
         displayName,
@@ -590,29 +723,37 @@ TO FIX THIS:
         role: "client",
         isActive: true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        mustChangePassword: true
-      });
+        mustChangePassword: true,
+        isOnboarded: hasOnboardingData
+      }, { merge: true });
 
-      console.log(`Successfully created Firestore profile for: ${userRecord.uid}`);
+      console.log(`DEBUG: Successfully updated Firestore profile for: ${userRecord.uid}`);
 
-      // Send email with temporary password
+      console.log(`DEBUG: Preparing welcome email for ${email}...`);
+      const portalUrl = process.env.APP_URL || "https://portal.mrleeteaches.com";
       const emailBody = `
         Hi ${displayName},
         
-        Your coach, Lee, has created an account for you on the MrLeeTeaches Coaching Portal.
+        Your coach, Stewart, has created an account for you on the MrLeeTeaches Coaching Portal.
         
-        You can log in at: ${process.env.APP_URL || "the portal"}
-        Your temporary password is: ${tempPassword}
+        You can log in at: https://portal.mrleeteaches.com
+        Your temporary password is: ${tempPassword || "(Already set or previously sent)"}
         
         You will be prompted to change your password upon your first login.
         
-        Best regards,
-        MrLeeTeaches Team
+        Take Care,
+        The MrLeeTeaches Team
       `;
 
+      console.log(`DEBUG: Calling sendEmail for ${email}`);
       await sendEmail(email, "Welcome to MrLeeTeaches Coaching Portal", emailBody);
+      console.log(`DEBUG: sendEmail call completed for ${email}`);
 
-      res.json({ message: "Client created successfully", uid: userRecord.uid });
+      res.json({ 
+        message: "Client created successfully", 
+        uid: userRecord.uid,
+        tempPassword: tempPassword 
+      });
     } catch (error: any) {
       console.error("Failed to create client:", error);
       let errorMessage = error.message;
@@ -632,6 +773,72 @@ TO FIX THIS:
         `;
       }
       res.status(500).json({ error: errorMessage });
+    }
+  });
+
+  app.post("/api/admin/resend-welcome", async (req, res) => {
+    const { uid } = req.body;
+    if (!uid) return res.status(400).json({ error: "UID is required" });
+
+    try {
+      const userDoc = await db.collection("users").doc(uid).get();
+      if (!userDoc.exists) return res.status(404).json({ error: "User not found" });
+      
+      const userData = userDoc.data()!;
+      const email = userData.email;
+      const displayName = userData.displayName;
+
+      console.log(`DEBUG: Resending welcome email for ${email}...`);
+      const portalUrl = process.env.APP_URL || "https://portal.mrleeteaches.com";
+      const emailBody = `
+        Hi ${displayName},
+        
+        Your coach, Lee, has sent you a reminder to log in to the MrLeeTeaches Coaching Portal.
+        
+        You can log in at: https://portal.mrleeteaches.com
+        
+        If you haven't set your password yet, please use the "Forgot Password" link on the login page to set a new one.
+        
+        Best regards,
+        MrLeeTeaches Team
+      `;
+
+      await sendEmail(email, "Welcome to MrLeeTeaches Coaching Portal (Reminder)", emailBody);
+      res.json({ message: "Welcome email resent successfully" });
+    } catch (error: any) {
+      console.error("Failed to resend welcome email:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // --- Admin: Update Client Profile ---
+  app.post("/api/admin/update-client", async (req, res) => {
+    const { uid, ...profileData } = req.body;
+    
+    if (!uid) {
+      return res.status(400).json({ error: "Client UID is required." });
+    }
+
+    try {
+      const userRef = db.collection("users").doc(uid);
+      const userDoc = await userRef.get();
+
+      if (!userDoc.exists) {
+        return res.status(404).json({ error: "Client not found." });
+      }
+
+      // If coach is providing onboarding data, set isOnboarded to true
+      const updateData: any = { ...profileData };
+      if (profileData.age || profileData.emergencyContactName || profileData.parentName) {
+        updateData.isOnboarded = true;
+      }
+
+      await userRef.update(updateData);
+
+      res.json({ message: "Client profile updated successfully" });
+    } catch (error: any) {
+      console.error("Failed to update client profile:", error);
+      res.status(500).json({ error: error.message });
     }
   });
 
@@ -755,9 +962,20 @@ TO FIX THIS:
     const { uid } = req.params;
     try {
       // Delete from Firebase Auth
-      await admin.auth().deleteUser(uid);
+      try {
+        await admin.auth().deleteUser(uid);
+      } catch (authError: any) {
+        // If the user is already gone from Auth, we still want to proceed with Firestore cleanup
+        if (authError.code === 'auth/user-not-found') {
+          console.warn(`User ${uid} not found in Firebase Auth, proceeding to delete Firestore record.`);
+        } else {
+          throw authError;
+        }
+      }
+
       // Delete from Firestore
       await db.collection("users").doc(uid).delete();
+      
       res.json({ message: "Client deleted successfully" });
     } catch (error: any) {
       console.error("Failed to delete client:", error);
@@ -770,19 +988,26 @@ TO FIX THIS:
     // Use environment variables for SMTP
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || "587"),
-    secure: process.env.SMTP_SECURE === "true",
+    secure: process.env.SMTP_SECURE === "true" || process.env.SMTP_PORT === "465",
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      user: process.env.SMTP_USER?.trim(),
+      pass: process.env.SMTP_PASS?.replace(/\s/g, ""),
     },
     // Add a timeout to prevent hanging
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 10000,
+    // TLS options for better compatibility with some servers
+    tls: {
+      rejectUnauthorized: process.env.SMTP_REJECT_UNAUTHORIZED !== "false",
+    },
+    debug: process.env.SMTP_DEBUG === "true",
+    logger: process.env.SMTP_DEBUG === "true",
   });
 
   // Verify connection on startup
   if (process.env.SMTP_USER) {
+    console.log(`Attempting to verify SMTP connection to ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} as ${process.env.SMTP_USER?.trim()}`);
     transporter.verify((error, success) => {
       if (error) {
         console.error("SMTP Connection Error:", error);
@@ -830,18 +1055,30 @@ TO FIX THIS:
       console.log(`[MOCK EMAIL] To: ${to}, Subject: ${subject}, Body: ${text}`);
       return;
     }
+    
+    const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+    const fromName = process.env.SMTP_FROM_NAME || "MrLeeTeaches";
+    const replyTo = process.env.SMTP_REPLY_TO || fromEmail;
+    
+    console.log(`Attempting to send email to ${to} from ${fromEmail} using ${process.env.SMTP_HOST}:${process.env.SMTP_PORT}`);
+    
     try {
-      await transporter.sendMail({
-        from: `"MrLeeTeaches" <${process.env.SMTP_USER}>`,
+      const info = await transporter.sendMail({
+        from: `"${fromName}" <${fromEmail}>`,
         to,
+        replyTo,
         subject,
         text,
       });
-      console.log(`Email sent to ${to}`);
+      console.log(`Email successfully sent to ${to}. MessageId: ${info.messageId}`);
     } catch (error: any) {
-      console.error(`Failed to send email to ${to}:`, error);
-      if (error.message.includes("Greeting never received")) {
-        console.log("Tip: Check your SMTP_PORT and SMTP_SECURE settings. If using port 587, SMTP_SECURE must be 'false'. If using port 465, it must be 'true'.");
+      console.error(`CRITICAL: Failed to send email to ${to}:`, error);
+      if (error.code === 'EAUTH') {
+        console.error("SMTP Authentication failed. Check SMTP_USER and SMTP_PASS.");
+      } else if (error.code === 'ECONNREFUSED') {
+        console.error("SMTP Connection refused. Check SMTP_HOST and SMTP_PORT.");
+      } else if (error.message.includes("Greeting never received")) {
+        console.error("Tip: Check your SMTP_PORT and SMTP_SECURE settings. If using port 587, SMTP_SECURE must be 'false'. If using port 465, it must be 'true'.");
       }
     }
   }
