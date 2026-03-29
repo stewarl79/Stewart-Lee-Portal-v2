@@ -732,23 +732,43 @@ TO FIX THIS:
       console.log(`DEBUG: Successfully updated Firestore profile for: ${userRecord.uid}`);
 
       console.log(`DEBUG: Preparing welcome email for ${email}...`);
-      const portalUrl = process.env.APP_URL || "https://portal.mrleeteaches.com";
-      const emailBody = `
+      const portalUrl = "https://portal.mrleeteaches.com";
+      const guideUrl = "https://mrleeteaches.com/add-to-phone/";
+      const emailText = `
         Hi ${displayName},
         
         Your coach, Stewart, has created an account for you on the MrLeeTeaches Coaching Portal.
         
-        You can log in at: https://portal.mrleeteaches.com
+        You can log in at: ${portalUrl}
         Your temporary password is: ${tempPassword || "(Already set or previously sent)"}
         
         You will be prompted to change your password upon your first login.
+
+        How to add the portal to your phone:
+        You can view the instructions here: ${guideUrl}
+        I've also attached a copy of the instructions to this email for your convenience.
         
         Take Care,
         The MrLeeTeaches Team
       `;
 
+      const emailHtml = `
+        <div style="font-family: sans-serif; color: #333; line-height: 1.6;">
+          <p>Hi ${displayName},</p>
+          <p>Your coach, <strong>Stewart</strong>, has created an account for you on the <strong>MrLeeTeaches Coaching Portal</strong>.</p>
+          <p>You can log in at: <a href="${portalUrl}">${portalUrl}</a></p>
+          <p>Your temporary password is: <code>${tempPassword || "(Already set or previously sent)"}</code></p>
+          <p>You will be prompted to change your password upon your first login.</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p><strong>How to add the portal to your phone:</strong></p>
+          <p>You can view the instructions here: <a href="${guideUrl}">${guideUrl}</a></p>
+          <p>I've also attached a copy of the instructions to this email for your convenience.</p>
+          <p>Take Care,<br>The MrLeeTeaches Team</p>
+        </div>
+      `;
+
       console.log(`DEBUG: Calling sendEmail for ${email}`);
-      await sendEmail(email, "Welcome to MrLeeTeaches Coaching Portal", emailBody);
+      await sendEmail(email, "Welcome to MrLeeTeaches Coaching Portal", emailText, emailHtml);
       console.log(`DEBUG: sendEmail call completed for ${email}`);
 
       res.json({ 
@@ -791,21 +811,40 @@ TO FIX THIS:
       const displayName = userData.displayName;
 
       console.log(`DEBUG: Resending welcome email for ${email}...`);
-      const portalUrl = process.env.APP_URL || "https://portal.mrleeteaches.com";
-      const emailBody = `
+      const portalUrl = "https://portal.mrleeteaches.com";
+      const guideUrl = "https://mrleeteaches.com/add-to-phone/";
+      const emailText = `
         Hi ${displayName},
         
         Your coach, Lee, has sent you a reminder to log in to the MrLeeTeaches Coaching Portal.
         
-        You can log in at: https://portal.mrleeteaches.com
+        You can log in at: ${portalUrl}
         
         If you haven't set your password yet, please use the "Forgot Password" link on the login page to set a new one.
+
+        How to add the portal to your phone:
+        You can view the instructions here: ${guideUrl}
+        I've also attached a copy of the instructions to this email for your convenience.
         
         Best regards,
         MrLeeTeaches Team
       `;
 
-      await sendEmail(email, "Welcome to MrLeeTeaches Coaching Portal (Reminder)", emailBody);
+      const emailHtml = `
+        <div style="font-family: sans-serif; color: #333; line-height: 1.6;">
+          <p>Hi ${displayName},</p>
+          <p>Your coach, <strong>Lee</strong>, has sent you a reminder to log in to the <strong>MrLeeTeaches Coaching Portal</strong>.</p>
+          <p>You can log in at: <a href="${portalUrl}">${portalUrl}</a></p>
+          <p>If you haven't set your password yet, please use the "Forgot Password" link on the login page to set a new one.</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p><strong>How to add the portal to your phone:</strong></p>
+          <p>You can view the instructions here: <a href="${guideUrl}">${guideUrl}</a></p>
+          <p>I've also attached a copy of the instructions to this email for your convenience.</p>
+          <p>Best regards,<br>MrLeeTeaches Team</p>
+        </div>
+      `;
+
+      await sendEmail(email, "Welcome to MrLeeTeaches Coaching Portal (Reminder)", emailText, emailHtml);
       res.json({ message: "Welcome email resent successfully" });
     } catch (error: any) {
       console.error("Failed to resend welcome email:", error);
@@ -1035,15 +1074,28 @@ TO FIX THIS:
         const startTime = appt.startTime.toDate ? appt.startTime.toDate() : new Date(appt.startTime);
         const remindersSent = appt.remindersSent || [];
 
+        const guideUrl = "https://mrleeteaches.com/add-to-phone/";
+        const htmlFooter = `
+          <br><br>
+          <p><strong>How to add the portal to your phone:</strong></p>
+          <p>You can view the instructions here: <a href="${guideUrl}">${guideUrl}</a></p>
+          <p>I've also attached a copy of the instructions to this email for your convenience.</p>
+        `;
+        const textFooter = `\n\nHow to add the portal to your phone:\nYou can view the instructions here: ${guideUrl}\nI've also attached a copy of the instructions to this email for your convenience.`;
+
         // 48h reminder
         if (startTime <= fortyEightHoursFromNow && startTime > now && !remindersSent.includes("48h")) {
-          await sendEmail(appt.clientEmail, "Reminder: Coaching Session in 48 Hours", `Hi, your session "${appt.title}" is in 48 hours.`);
+          const text = `Hi, your session "${appt.title}" is in 48 hours.${textFooter}`;
+          const html = `<p>Hi,</p><p>Your session "<strong>${appt.title}</strong>" is in 48 hours.</p>${htmlFooter}`;
+          await sendEmail(appt.clientEmail, "Reminder: Coaching Session in 48 Hours", text, html);
           await doc.ref.update({ remindersSent: admin.firestore.FieldValue.arrayUnion("48h") });
         }
 
         // 1h reminder
         if (startTime <= oneHourFromNow && startTime > now && !remindersSent.includes("1h")) {
-          await sendEmail(appt.clientEmail, "Reminder: Coaching Session in 1 Hour", `Hi, your session "${appt.title}" starts in 1 hour.`);
+          const text = `Hi, your session "${appt.title}" starts in 1 hour.${textFooter}`;
+          const html = `<p>Hi,</p><p>Your session "<strong>${appt.title}</strong>" starts in 1 hour.</p>${htmlFooter}`;
+          await sendEmail(appt.clientEmail, "Reminder: Coaching Session in 1 Hour", text, html);
           await doc.ref.update({ remindersSent: admin.firestore.FieldValue.arrayUnion("1h") });
         }
       }
@@ -1052,7 +1104,7 @@ TO FIX THIS:
     }
   }
 
-  async function sendEmail(to: string, subject: string, text: string) {
+  async function sendEmail(to: string, subject: string, text: string, html?: string) {
     if (!process.env.SMTP_USER) {
       console.log(`[MOCK EMAIL] To: ${to}, Subject: ${subject}, Body: ${text}`);
       return;
@@ -1065,12 +1117,20 @@ TO FIX THIS:
     console.log(`Attempting to send email to ${to} from ${fromEmail} using ${process.env.SMTP_HOST}:${process.env.SMTP_PORT}`);
     
     try {
+      const attachments = [{
+        filename: 'add-to-phone-guide.png',
+        path: 'https://mrleeteaches.com/wp-content/uploads/2026/03/add-to-phone.png',
+        contentDisposition: 'attachment'
+      }];
+
       const info = await transporter.sendMail({
         from: `"${fromName}" <${fromEmail}>`,
         to,
         replyTo,
         subject,
         text,
+        html,
+        attachments
       });
       console.log(`Email successfully sent to ${to}. MessageId: ${info.messageId}`);
     } catch (error: any) {
