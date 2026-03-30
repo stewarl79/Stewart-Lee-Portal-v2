@@ -116,6 +116,18 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation time" }
       },
       "required": ["title", "driveFileId", "webViewLink", "clientUid", "coachUid", "createdAt"]
+    },
+    "SyncConfig": {
+      "title": "Sync Configuration",
+      "description": "Dynamic scheduling settings for background tasks.",
+      "type": "object",
+      "properties": {
+        "calendarSyncHours": { "type": "array", "items": { "type": "integer" }, "description": "EST hours to sync calendar" },
+        "reminderStartHour": { "type": "integer", "description": "EST hour to start reminders" },
+        "reminderEndHour": { "type": "integer", "description": "EST hour to end reminders" },
+        "catchAllAfterEnd": { "type": "boolean", "description": "Whether to send evening reminders at the end hour" }
+      },
+      "required": ["calendarSyncHours", "reminderStartHour", "reminderEndHour", "catchAllAfterEnd"]
     }
   },
   "firestore": {
@@ -146,6 +158,10 @@
     "/private_notes/{noteId}": {
       "schema": "PrivateNote",
       "description": "Metadata for private session notes in Drive"
+    },
+    "/settings/sync_config": {
+      "schema": "SyncConfig",
+      "description": "Global sync and reminder settings"
     }
   }
 }

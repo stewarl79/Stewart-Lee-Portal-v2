@@ -11,6 +11,7 @@ import cron from "node-cron";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import { Readable } from "stream";
+import webpush from "web-push";
 
 dotenv.config();
 console.log("DEBUG: SMTP_USER is", process.env.SMTP_USER ? "SET" : "NOT SET");
@@ -74,6 +75,54 @@ async function startServer() {
   app.use(express.json());
 
   app.set("trust proxy", true);
+
+  // Configure web-push
+  const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+
+  if (vapidPublicKey && vapidPrivateKey) {
+    webpush.setVapidDetails(
+      "mailto:msustewart@gmail.com",
+      vapidPublicKey,
+      vapidPrivateKey
+    );
+    console.log("Web Push VAPID details set.");
+  }
+
+  app.post("/api/notifications/subscribe", async (req, res) => {
+    const { subscription, userId } = req.body;
+    if (!subscription || !userId) return res.status(400).json({ error: "Missing subscription or userId" });
+    
+    try {
+      await db.collection("push_subscriptions").doc(userId).set({
+        subscription,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      res.status(201).json({ success: true });
+    } catch (error) {
+      console.error("Failed to save subscription:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/notifications/send", async (req, res) => {
+    const { receiverUid, title, body, data } = req.body;
+    if (!receiverUid) return res.status(400).json({ error: "Missing receiverUid" });
+
+    try {
+      const subDoc = await db.collection("push_subscriptions").doc(receiverUid).get();
+      if (!subDoc.exists) {
+        return res.status(404).json({ error: "No subscription found for user" });
+      }
+
+      const { subscription } = subDoc.data()!;
+      await webpush.sendNotification(subscription, JSON.stringify({ title, body, data }));
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to send push notification:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
 
   // Force HTTPS redirect for custom domains
   app.use((req, res, next) => {
@@ -548,6 +597,40 @@ async function startServer() {
     }
   });
 
+  // --- Sync & Reminder Settings ---
+  const DEFAULT_SYNC_SETTINGS = {
+    calendarSyncHours: [6, 12], // 6 AM and 12 PM EST
+    reminderStartHour: 8,      // 8 AM EST
+    reminderEndHour: 17,       // 5 PM EST
+    catchAllAfterEnd: true     // Send evening reminders at 5 PM
+  };
+
+  async function getSyncSettings() {
+    try {
+      const doc = await db.collection("settings").doc("sync_config").get();
+      if (doc.exists) {
+        return { ...DEFAULT_SYNC_SETTINGS, ...doc.data() };
+      }
+    } catch (e) {
+      console.error("Failed to fetch sync settings, using defaults:", e);
+    }
+    return DEFAULT_SYNC_SETTINGS;
+  }
+
+  app.get("/api/admin/sync-settings", async (req, res) => {
+    const settings = await getSyncSettings();
+    res.json(settings);
+  });
+
+  app.post("/api/admin/sync-settings", async (req, res) => {
+    try {
+      await db.collection("settings").doc("sync_config").set(req.body, { merge: true });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   async function getGoogleAuthClient() {
     if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
       throw new Error("Google Service Account credentials missing in environment variables.");
@@ -564,6 +647,19 @@ async function startServer() {
   }
   
   async function syncCalendar() {
+    const settings = await getSyncSettings();
+    const estHour = parseInt(new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      hour12: false
+    }).format(new Date()));
+
+    // Only run if it's one of the scheduled hours
+    if (!settings.calendarSyncHours.includes(estHour)) {
+      console.log(`Skipping calendar sync at ${estHour} EST (not in schedule: ${settings.calendarSyncHours.join(',')})`);
+      return;
+    }
+
     const coachEmail = "msustewart@gmail.com";
     const calendarId = "e9520780ffd4d072d6bf8237af1d9c1fee4dcca6db5d479ec4e89e054d4f224b@group.calendar.google.com";
     
@@ -1060,7 +1156,29 @@ TO FIX THIS:
   }
 
   async function sendReminders() {
-    console.log("Checking for reminders to send...");
+    const settings = await getSyncSettings();
+    const estHour = parseInt(new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      hour12: false
+    }).format(new Date()));
+
+    const estDate = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric"
+    }).format(new Date());
+
+    const isWithinWindow = estHour >= settings.reminderStartHour && estHour <= settings.reminderEndHour;
+    const isLastSync = estHour === settings.reminderEndHour;
+
+    if (!isWithinWindow) {
+      console.log(`Skipping reminders at ${estHour} EST (outside window ${settings.reminderStartHour}-${settings.reminderEndHour})`);
+      return;
+    }
+
+    console.log(`Checking for reminders to send at ${estHour} EST...`);
     const now = new Date();
     const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
     const fortyEightHoursFromNow = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -1073,6 +1191,22 @@ TO FIX THIS:
         const appt = doc.data();
         const startTime = appt.startTime.toDate ? appt.startTime.toDate() : new Date(appt.startTime);
         const remindersSent = appt.remindersSent || [];
+
+        // Check if it's "later today" (after the end hour)
+        const apptEstHour = parseInt(new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/New_York",
+          hour: "numeric",
+          hour12: false
+        }).format(startTime));
+        
+        const apptEstDate = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/New_York",
+          year: "numeric",
+          month: "numeric",
+          day: "numeric"
+        }).format(startTime);
+
+        const isLaterToday = apptEstHour > settings.reminderEndHour && estDate === apptEstDate;
 
         const guideUrl = "https://mrleeteaches.com/add-to-phone/";
         const htmlFooter = `
@@ -1091,11 +1225,15 @@ TO FIX THIS:
           await doc.ref.update({ remindersSent: admin.firestore.FieldValue.arrayUnion("48h") });
         }
 
-        // 1h reminder
-        if (startTime <= oneHourFromNow && startTime > now && !remindersSent.includes("1h")) {
-          const text = `Hi, your session "${appt.title}" starts in 1 hour.${textFooter}`;
-          const html = `<p>Hi,</p><p>Your session "<strong>${appt.title}</strong>" starts in 1 hour.</p>${htmlFooter}`;
-          await sendEmail(appt.clientEmail, "Reminder: Coaching Session in 1 Hour", text, html);
+        // 1h reminder (Normal or Catch-all)
+        const shouldSend1h = (startTime <= oneHourFromNow && startTime > now) || 
+                             (isLastSync && isLaterToday && settings.catchAllAfterEnd);
+
+        if (shouldSend1h && !remindersSent.includes("1h")) {
+          const timeLabel = isLaterToday ? "later today" : "in 1 hour";
+          const text = `Hi, your session "${appt.title}" starts ${timeLabel}.${textFooter}`;
+          const html = `<p>Hi,</p><p>Your session "<strong>${appt.title}</strong>" starts ${timeLabel}.</p>${htmlFooter}`;
+          await sendEmail(appt.clientEmail, `Reminder: Coaching Session ${timeLabel}`, text, html);
           await doc.ref.update({ remindersSent: admin.firestore.FieldValue.arrayUnion("1h") });
         }
       }
@@ -1146,8 +1284,10 @@ TO FIX THIS:
   }
 
   // Cron jobs
-  cron.schedule("0 * * * *", syncCalendar); // Every hour
-  cron.schedule("*/15 * * * *", sendReminders); // Every 15 minutes
+  // Run every hour at the top of the hour. 
+  // Internal logic in syncCalendar and sendReminders checks settings to decide if it should actually run.
+  cron.schedule("0 * * * *", syncCalendar); 
+  cron.schedule("0 * * * *", sendReminders); 
 
   // --- Vite Middleware ---
   if (process.env.NODE_ENV !== "production") {

@@ -77,6 +77,23 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding)
+    .replace(/\-/g, '+')
+    .replace(/_/g, '/');
+
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+const VAPID_PUBLIC_KEY = 'BLUp9ngKYOHuvx61MrWHFHsaHJwiPUjOPy7XE7hCV7mRC0sPBy-SDLs9lPy2XODh1JbPb26HeCYVZE9qEKbNXe0';
+
 function safeToDate(date: any): Date {
   if (!date) return new Date();
   if (typeof date.toDate === 'function') return date.toDate();
@@ -322,13 +339,17 @@ const MessagingView = ({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-    // Mark unread messages as read
-    filteredMessages.forEach(m => {
-      if (m.receiverUid === user.uid && !m.isRead) {
+    
+    // Mark unread messages as read - only if they are for the current user
+    // and we use a ref to track which ones we've already tried to mark as read
+    // to prevent infinite loops if Firestore is slow to update.
+    const unreadMessages = filteredMessages.filter(m => m.receiverUid === user.uid && !m.isRead);
+    if (unreadMessages.length > 0) {
+      unreadMessages.forEach(m => {
         onMarkAsRead(m.id);
-      }
-    });
-  }, [filteredMessages, user.uid, onMarkAsRead]);
+      });
+    }
+  }, [filteredMessages.length, user.uid, onMarkAsRead]);
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
@@ -499,6 +520,7 @@ export default function App() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
+  const isInitialMessagesLoad = React.useRef(true);
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -520,7 +542,29 @@ export default function App() {
     return () => window.removeEventListener('focus', checkPermission);
   }, []);
 
-  const requestNotificationPermission = async () => {
+  useEffect(() => {
+    if (user && notificationPermission === 'granted' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(async (registration) => {
+        try {
+          const subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+          });
+          
+          await fetch('/api/notifications/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscription, userId: user.uid })
+          });
+          console.log('Push subscription successful');
+        } catch (error) {
+          console.error('Failed to subscribe to push notifications:', error);
+        }
+      });
+    }
+  }, [user, notificationPermission]);
+
+  const requestNotificationPermission = React.useCallback(async () => {
     if (!('Notification' in window)) {
       alert('This browser does not support desktop notification');
       return;
@@ -541,7 +585,8 @@ export default function App() {
     } catch (error) {
       console.error('Error requesting notification permission:', error);
     }
-  };
+  }, []);
+
   const [showActionModal, setShowActionModal] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [selectedClient, setSelectedClient] = useState<any>(null);
@@ -630,7 +675,7 @@ export default function App() {
     return () => unsubCoach();
   }, [user, profile]);
 
-  // Real-time listeners
+  // Real-time listeners: Appointments
   useEffect(() => {
     if (!user || !profile) return;
 
@@ -647,6 +692,13 @@ export default function App() {
       handleFirestoreError(err, OperationType.LIST, 'appointments');
     });
 
+    return () => unsubAppts();
+  }, [user, profile]);
+
+  // Real-time listeners: Documents
+  useEffect(() => {
+    if (!user || !profile) return;
+
     const docsQuery = profile.role === 'coach'
       ? query(collection(db, 'documents'), orderBy('createdAt', 'desc'))
       : query(collection(db, 'documents'), where('sharedWithEmail', '==', user.email), orderBy('createdAt', 'desc'));
@@ -655,11 +707,29 @@ export default function App() {
       setDocuments(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as SharedDocument)));
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'documents'));
 
-    const messagesQuery = query(
-      collection(db, 'messages'),
-      where(profile.role === 'coach' ? 'senderUid' : 'receiverUid', '==', user.uid),
-      orderBy('createdAt', 'desc')
-    );
+    return () => unsubDocs();
+  }, [user, profile]);
+
+  // Real-time listeners: Clients (Coach only)
+  useEffect(() => {
+    if (!user || !profile || profile.role !== 'coach') return;
+
+    console.log("Coach detected, starting clients listener...");
+    const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'client')), (snapshot) => {
+      const clientList = snapshot.docs.map(d => d.data() as UserProfile);
+      console.log(`Fetched ${clientList.length} clients from database:`, firebaseConfig.firestoreDatabaseId);
+      setClients(clientList);
+    }, (err) => {
+      console.error("Clients listener error:", err);
+      handleFirestoreError(err, OperationType.LIST, 'users');
+    });
+
+    return () => unsubClients();
+  }, [user, profile]);
+
+  // Real-time listeners: Messages
+  useEffect(() => {
+    if (!user || !profile) return;
 
     // We need two queries for messages to get both sent and received
     const sentMessagesQuery = query(collection(db, 'messages'), where('senderUid', '==', user.uid));
@@ -677,6 +747,29 @@ export default function App() {
 
     const unsubReceived = onSnapshot(receivedMessagesQuery, (snapshot) => {
       const received = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message));
+      
+      // Handle notifications for new messages
+      if (!isInitialMessagesLoad.current && notificationPermission === 'granted') {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const msg = change.doc.data() as Message;
+            // Only notify for messages from others
+            if (msg.senderUid !== user.uid) {
+              const sender = profile?.role === 'coach' 
+                ? clients.find(c => c.uid === msg.senderUid)?.displayName || 'Client'
+                : 'Coach';
+              
+              new Notification(`New Message from ${sender}`, {
+                body: msg.content,
+                icon: '/logo.png',
+                tag: msg.id // Prevent duplicate notifications for the same message
+              });
+            }
+          }
+        });
+      }
+      isInitialMessagesLoad.current = false;
+
       setMessages(prev => {
         const other = prev.filter(m => m.receiverUid !== user.uid);
         const combined = [...other, ...received];
@@ -685,24 +778,10 @@ export default function App() {
       });
     });
 
-    if (profile.role === 'coach') {
-      // Listen to ALL users who are clients
-      console.log("Coach detected, starting clients listener...");
-      const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'client')), (snapshot) => {
-        const clientList = snapshot.docs.map(d => d.data() as UserProfile);
-        console.log(`Fetched ${clientList.length} clients from database:`, firebaseConfig.firestoreDatabaseId);
-        setClients(clientList);
-      }, (err) => {
-        console.error("Clients listener error:", err);
-        handleFirestoreError(err, OperationType.LIST, 'users');
-      });
-      return () => { unsubAppts(); unsubDocs(); unsubClients(); unsubSent(); unsubReceived(); };
-    }
+    return () => { unsubSent(); unsubReceived(); };
+  }, [user, profile, clients, notificationPermission]);
 
-    return () => { unsubAppts(); unsubDocs(); unsubSent(); unsubReceived(); };
-  }, [user, profile]);
-
-  const handleGoogleLogin = async () => {
+  const handleGoogleLogin = React.useCallback(async () => {
     try {
       setAuthError('');
       await signInWithPopup(auth, new GoogleAuthProvider());
@@ -710,9 +789,9 @@ export default function App() {
       console.error('Google Login Error:', error);
       setAuthError(error.message);
     }
-  };
+  }, []);
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  const handleEmailAuth = React.useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
     setAuthMessage('');
@@ -731,14 +810,14 @@ export default function App() {
     } catch (error: any) {
       setAuthError(error.message);
     }
-  };
+  }, [authMode, email, password, displayName]);
 
-  const handleLogout = () => {
+  const handleLogout = React.useCallback(() => {
     signOut(auth);
     setShowPasswordChange(false);
-  };
+  }, []);
 
-  const handlePasswordChange = async (e: React.FormEvent) => {
+  const handlePasswordChange = React.useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
       setPasswordChangeError('Passwords do not match');
@@ -787,7 +866,131 @@ export default function App() {
     } finally {
       setPasswordChangeLoading(false);
     }
-  };
+  }, [newPassword, confirmPassword, profile?.uid]);
+
+  const handleReschedule = React.useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAppointment) return;
+    setActionLoading(true);
+    try {
+      const response = await fetch('/api/appointments/reschedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appointmentId: selectedAppointment.id,
+          reason: actionReason,
+          desiredDateTime: rescheduleDate,
+          clientName: profile?.displayName
+        })
+      });
+      if (!response.ok) throw new Error('Failed to request reschedule');
+      setShowActionModal(false);
+      setActionReason('');
+      setRescheduleDate('');
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [selectedAppointment, actionReason, rescheduleDate, profile?.displayName]);
+
+  const handleCancel = React.useCallback(async () => {
+    if (!selectedAppointment) return;
+    setActionLoading(true);
+    try {
+      const response = await fetch('/api/appointments/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appointmentId: selectedAppointment.id,
+          reason: actionReason,
+          clientName: profile?.displayName
+        })
+      });
+      if (!response.ok) throw new Error('Failed to cancel appointment');
+      setShowActionModal(false);
+      setActionReason('');
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [selectedAppointment, actionReason, profile?.displayName]);
+
+  const handleRequest = React.useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading(true);
+    try {
+      const response = await fetch('/api/appointments/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: user?.uid,
+          email: user?.email,
+          displayName: profile?.displayName,
+          reason: requestReason,
+          desiredDateTime: requestDate
+        })
+      });
+      if (!response.ok) throw new Error('Failed to submit request');
+      setShowRequestModal(false);
+      setRequestReason('');
+      setRequestDate('');
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [user?.uid, user?.email, profile?.displayName, requestReason, requestDate]);
+
+  const openAction = React.useCallback((appt: any, type: 'cancel' | 'reschedule') => {
+    const hoursDiff = differenceInHours(safeToDate(appt.startTime), new Date());
+    if (hoursDiff <= 24) {
+      setShowLateNoticeModal(true);
+    } else {
+      setSelectedAppointment(appt);
+      setActionType(type);
+      setShowActionModal(true);
+    }
+  }, []);
+
+  const handleSendMessage = React.useCallback(async (receiverUid: string, content: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'messages'), {
+        senderUid: user.uid,
+        receiverUid,
+        content,
+        createdAt: serverTimestamp(),
+        isRead: false,
+        type: 'text'
+      });
+
+      // Trigger push notification via server
+      fetch('/api/notifications/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receiverUid,
+          title: `New Message from ${profile?.displayName || 'User'}`,
+          body: content,
+          data: { url: '/messages' }
+        })
+      }).catch(err => console.error('Failed to trigger push notification', err));
+    } catch (err) {
+      console.error('Failed to send message', err);
+    }
+  }, [user, profile?.displayName]);
+
+  const handleMarkAsRead = React.useCallback(async (messageId: string) => {
+    try {
+      await updateDoc(doc(db, 'messages', messageId), {
+        isRead: true
+      });
+    } catch (err) {
+      console.error('Failed to mark message as read', err);
+    }
+  }, []);
 
   if (loading || (user && !profile)) {
     return (
@@ -935,118 +1138,6 @@ export default function App() {
       setProfile(prev => prev ? { ...prev, isOnboarded: true } : null);
     }} />;
   }
-
-  const handleReschedule = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedAppointment) return;
-    setActionLoading(true);
-    try {
-      const response = await fetch('/api/appointments/reschedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          appointmentId: selectedAppointment.id,
-          reason: actionReason,
-          desiredDateTime: rescheduleDate,
-          clientName: profile?.displayName
-        })
-      });
-      if (!response.ok) throw new Error('Failed to request reschedule');
-      setShowActionModal(false);
-      setActionReason('');
-      setRescheduleDate('');
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!selectedAppointment) return;
-    setActionLoading(true);
-    try {
-      const response = await fetch('/api/appointments/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          appointmentId: selectedAppointment.id,
-          reason: actionReason,
-          clientName: profile?.displayName
-        })
-      });
-      if (!response.ok) throw new Error('Failed to cancel appointment');
-      setShowActionModal(false);
-      setActionReason('');
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleRequest = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setActionLoading(true);
-    try {
-      const response = await fetch('/api/appointments/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: user?.uid,
-          email: user?.email,
-          displayName: profile?.displayName,
-          reason: requestReason,
-          desiredDateTime: requestDate
-        })
-      });
-      if (!response.ok) throw new Error('Failed to submit request');
-      setShowRequestModal(false);
-      setRequestReason('');
-      setRequestDate('');
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const openAction = (appt: any, type: 'cancel' | 'reschedule') => {
-    const hoursDiff = differenceInHours(safeToDate(appt.startTime), new Date());
-    if (hoursDiff <= 24) {
-      setShowLateNoticeModal(true);
-    } else {
-      setSelectedAppointment(appt);
-      setActionType(type);
-      setShowActionModal(true);
-    }
-  };
-
-  const handleSendMessage = async (receiverUid: string, content: string) => {
-    if (!user) return;
-    try {
-      await addDoc(collection(db, 'messages'), {
-        senderUid: user.uid,
-        receiverUid,
-        content,
-        createdAt: serverTimestamp(),
-        isRead: false,
-        type: 'text'
-      });
-    } catch (err) {
-      console.error('Failed to send message', err);
-    }
-  };
-
-  const handleMarkAsRead = async (messageId: string) => {
-    try {
-      await updateDoc(doc(db, 'messages', messageId), {
-        isRead: true
-      });
-    } catch (err) {
-      console.error('Failed to mark message as read', err);
-    }
-  };
 
   const renderContent = () => {
     switch (activeTab) {
@@ -4773,7 +4864,45 @@ function SettingsView({ profile, role, notificationPermission, onRequestNotifica
   const [emailTemplate, setEmailTemplate] = useState(profile?.reminderTemplate || 'Hi, your session "{title}" is in {time}.');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [syncSettings, setSyncSettings] = useState<any>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (role === 'coach') {
+      fetchSyncSettings();
+    }
+  }, [role]);
+
+  const fetchSyncSettings = async () => {
+    try {
+      const res = await fetch('/api/admin/sync-settings');
+      const data = await res.json();
+      setSyncSettings(data);
+    } catch (err) {
+      console.error('Failed to fetch sync settings', err);
+    }
+  };
+
+  const handleUpdateSyncSettings = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/admin/sync-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(syncSettings)
+      });
+      if (res.ok) {
+        alert('Sync settings updated!');
+      } else {
+        throw new Error('Failed to update');
+      }
+    } catch (err) {
+      console.error('Failed to update sync settings', err);
+      alert('Failed to update sync settings.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleUpdateTemplate = async () => {
     if (!auth.currentUser) return;
@@ -4901,6 +5030,70 @@ function SettingsView({ profile, role, notificationPermission, onRequestNotifica
                   className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-emerald-500 transition-colors disabled:opacity-50"
                 >
                   {saving ? 'Updating...' : 'Update Templates'}
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {role === 'coach' && syncSettings && (
+            <Card title="Sync & Reminders" subtitle="Manage background tasks and costs">
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Calendar Sync Hours (EST, 0-23)</label>
+                    <input 
+                      type="text" 
+                      value={syncSettings.calendarSyncHours.join(', ')}
+                      onChange={(e) => {
+                        const hours = e.target.value.split(',').map(h => parseInt(h.trim())).filter(h => !isNaN(h));
+                        setSyncSettings({...syncSettings, calendarSyncHours: hours});
+                      }}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      placeholder="e.g. 6, 12"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">Comma separated hours in 24h format.</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1">
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Reminder Start (EST)</label>
+                      <input 
+                        type="number" 
+                        min="0" max="23"
+                        value={syncSettings.reminderStartHour}
+                        onChange={(e) => setSyncSettings({...syncSettings, reminderStartHour: parseInt(e.target.value)})}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Reminder End (EST)</label>
+                      <input 
+                        type="number" 
+                        min="0" max="23"
+                        value={syncSettings.reminderEndHour}
+                        onChange={(e) => setSyncSettings({...syncSettings, reminderEndHour: parseInt(e.target.value)})}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="checkbox" 
+                    id="catchAll"
+                    checked={syncSettings.catchAllAfterEnd}
+                    onChange={(e) => setSyncSettings({...syncSettings, catchAllAfterEnd: e.target.checked})}
+                    className="w-5 h-5 rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <label htmlFor="catchAll" className="text-sm text-slate-300">
+                    Send evening reminders at the last sync of the day ({syncSettings.reminderEndHour}:00 EST)
+                  </label>
+                </div>
+                <button 
+                  onClick={handleUpdateSyncSettings}
+                  disabled={saving}
+                  className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-emerald-500 transition-colors disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save Sync Settings'}
                 </button>
               </div>
             </Card>

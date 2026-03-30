@@ -183,6 +183,15 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidSyncConfig(data) {
+      return data.keys().hasAll(['calendarSyncHours', 'reminderStartHour', 'reminderEndHour', 'catchAllAfterEnd']) &&
+             hasOnlyAllowedFields(['calendarSyncHours', 'reminderStartHour', 'reminderEndHour', 'catchAllAfterEnd']) &&
+             data.calendarSyncHours is list && data.calendarSyncHours.size() <= 24 &&
+             data.reminderStartHour is int && data.reminderStartHour >= 0 && data.reminderStartHour <= 23 &&
+             data.reminderEndHour is int && data.reminderEndHour >= 0 && data.reminderEndHour <= 23 &&
+             data.catchAllAfterEnd is bool;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -264,6 +273,12 @@ service cloud.firestore {
       allow update: if isAuthenticated() && request.auth.uid == resource.data.receiverUid && 
                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']) &&
                     request.resource.data.isRead == true;
+    }
+
+    match /settings/sync_config {
+      // Coaches can read and write sync settings.
+      allow read: if isCoach();
+      allow write: if isCoach() && isValidSyncConfig(request.resource.data);
     }
   }
 }
