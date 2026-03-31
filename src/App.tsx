@@ -4347,6 +4347,47 @@ const TOOLS = [
 ];
 
 function ToolsLibraryView() {
+  const [expandedIndices, setExpandedIndices] = useState<number[]>([]);
+
+  const toggleExpand = (index: number) => {
+    setExpandedIndices(prev => 
+      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
+    );
+  };
+
+  const getTruncatedText = (text: string, index: number) => {
+    const words = text.split(' ');
+    const isExpanded = expandedIndices.includes(index);
+    
+    if (words.length <= 30 || isExpanded) {
+      return (
+        <>
+          {text}
+          {words.length > 30 && (
+            <button 
+              onClick={() => toggleExpand(index)}
+              className="ml-1 text-emerald-500 hover:text-emerald-400 font-medium focus:outline-none"
+            >
+              less
+            </button>
+          )}
+        </>
+      );
+    }
+
+    return (
+      <>
+        {words.slice(0, 30).join(' ')}...
+        <button 
+          onClick={() => toggleExpand(index)}
+          className="ml-1 text-emerald-500 hover:text-emerald-400 font-medium focus:outline-none"
+        >
+          more
+        </button>
+      </>
+    );
+  };
+
   return (
     <div className="space-y-8">
       <header>
@@ -4361,9 +4402,9 @@ function ToolsLibraryView() {
               <Wrench className="w-6 h-6" />
             </div>
             <h3 className="text-lg font-semibold text-white mb-2">{tool.name}</h3>
-            <p className="text-sm text-slate-400 mb-6 flex-1 leading-relaxed">
-              {tool.description}
-            </p>
+            <div className="text-sm text-slate-400 mb-6 flex-1 leading-relaxed">
+              {getTruncatedText(tool.description, index)}
+            </div>
             <a 
               href={tool.link} 
               target="_blank" 
