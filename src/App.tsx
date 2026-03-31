@@ -4338,6 +4338,11 @@ const TOOLS = [
     name: "Energy Balance Dashboard",
     description: "The Energy Balance Dashboard is a low-friction tool designed to help you visualize your daily capacity and prevent burnout using the principles of Energy Accounting. Simply log your morning readiness using the quick slider, then tap to rate your daily activities as either energy 'drains' or restorative 'deposits'. The dashboard automatically graphs your trends so you can easily see what depletes your battery, proactively plan your recovery time, and export a one-click summary for our coaching sessions.",
     link: "https://script.google.com/macros/s/AKfycbweI30Ufi6n9vAPRsJGf_9duWFbIQ396LWvQUhuPP1q30oWbkp8EMaBgUFquFJG8yfIqA/exec"
+  },
+  {
+    name: "Task Deconstructor",
+    description: "The Task Deconstructor is a low-friction tool designed to help you bypass executive dysfunction and overcome the paralysis of getting started. Simply type in an overwhelming task and click 'Deconstruct For Me' to let the app automatically break your goal into microscopic, highly specific actions. Once you begin, the tool activates Tunnel Vision by hiding the overarching list and displaying only one single step on the screen at a time. Just focus on the action in front of you, click the 'Done' button when finished, and seamlessly build momentum until the entire project is cleared.",
+    link: "https://script.google.com/macros/s/AKfycbxxSdjN86vzQHKZKL2E8hbP8q7EpoV_2Fw1ATDW-qjIjhnBOw9HANpjEz-T5A0nRQUnZA/exec"
   }
 ];
 
