@@ -4337,22 +4337,22 @@ const TOOLS = [
   {
     name: "Energy Balance Dashboard",
     description: "The Energy Balance Dashboard is a low-friction tool designed to help you visualize your daily capacity and prevent burnout using the principles of Energy Accounting. Simply log your morning readiness using the quick slider, then tap to rate your daily activities as either energy 'drains' or restorative 'deposits'. The dashboard automatically graphs your trends so you can easily see what depletes your battery, proactively plan your recovery time, and export a one-click summary for our coaching sessions.",
-    link: "https://script.google.com/macros/s/AKfycbweI30Ufi6n9vAPRsJGf_9duWFbIQ396LWvQUhuPP1q30oWbkp8EMaBgUFquFJG8yfIqA/exec"
+    link: "https://script.google.com/macros/s/AKfycbw0DA96tNM30wiDZu0Q2iI0vXB7a0Bw2-IHi1Dz4v_HcMHGJ2Qbm0fgx9IJvYeVXtJk4A/exec"
   },
   {
     name: "Task Deconstructor",
     description: "The Task Deconstructor is a low-friction tool designed to help you bypass executive dysfunction and overcome the paralysis of getting started. Simply type in an overwhelming task and click 'Deconstruct For Me' to let the app automatically break your goal into microscopic, highly specific actions. Once you begin, the tool activates Tunnel Vision by hiding the overarching list and displaying only one single step on the screen at a time. Just focus on the action in front of you, click the 'Done' button when finished, and seamlessly build momentum until the entire project is cleared.",
-    link: "https://script.google.com/macros/s/AKfycbxxSdjN86vzQHKZKL2E8hbP8q7EpoV_2Fw1ATDW-qjIjhnBOw9HANpjEz-T5A0nRQUnZA/exec"
+    link: "https://script.google.com/macros/s/AKfycbwEusYxAKmAgSl3vs-LDPOS90HJ6wJygggfPDoi6eK4iyqKrZgdEpBAU5Y3NAQPWu8xtw/exec"
   },
   {
     name: "Time-Blindness Visualizer",
     description: `The Time-Blindness Visualizer is a sensory-friendly pacing tool designed to replace anxiety-inducing numerical countdowns with a low-demand visual representation of time. Simply select or type in your desired duration, and the screen will display five green energy blocks that gently drain in halves as time passes, allowing you to gauge your remaining "time volume" at a quick glance without doing mental math. When your session is complete, a soft, harmonic singing bowl chime provides a gentle cue to transition, allowing you to easily reset for your next focused chunk of work. This tool is built specifically to protect your working memory and help you pace your energy without triggering demand avoidance.`,
-    link: "https://script.google.com/macros/s/AKfycbxVvlVK0cWsvZYnQagg64by2xYbT_H3jwrZRS-v9QAzThwUzVGMmWQx8_qDJtQzVyzN/exec"
+    link: "https://script.google.com/macros/s/AKfycbypm9TIR_t_CFcF_3CKUOD8hWsGAb_4TH0T9X8mwGvgXnxsU1C9hdUqC6HXxhwrTfYv/exec"
   },
   {
     name: "Frictionless Brain Dump",
     description: `The Frictionless Brain Dump is designed to help you instantly externalize your working memory without the executive function tax of organizing your thoughts on the spot. Whether you have a sudden idea, a looming task, or simply need to process an emotion, just type or dictate your raw thoughts into the single text box and hit save. Every evening at 5:00 PM, the system automatically reviews your raw notes, sorts them into Tasks, Ideas, and Emotional Check-ins, and delivers a clean, organized digest straight to your inbox.`,
-    link: "https://script.google.com/macros/s/AKfycbytab2icnh-GNWnP--mpuEaoOD2a12VIWHNANxa-h7n8RLaaceqdbUj2veCL4judR8/exec"
+    link: "https://script.google.com/macros/s/AKfycbz2GEA-mlPGAJnlYV0pve6sznjOpJw3PW4awT2J-iO87maEtjciCm52YoYe18eN5Tfg/exec"
   }
 ];
 
