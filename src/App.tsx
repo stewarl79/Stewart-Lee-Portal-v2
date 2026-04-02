@@ -4352,7 +4352,7 @@ const TOOLS = [
   {
     name: "Frictionless Brain Dump",
     description: `The Frictionless Brain Dump is designed to help you instantly externalize your working memory without the executive function tax of organizing your thoughts on the spot. Whether you have a sudden idea, a looming task, or simply need to process an emotion, just type or dictate your raw thoughts into the single text box and hit save. Every evening at 5:00 PM, the system automatically reviews your raw notes, sorts them into Tasks, Ideas, and Emotional Check-ins, and delivers a clean, organized digest straight to your inbox.`,
-    link: "https://script.google.com/macros/s/AKfycbyC_spLbfOcVP_Hx25UKUK7Lj9ANgvkHauPGNmZDW0XdYyTEShvNuc5UtluBSQqiooi/exec"
+    link: "https://script.google.com/macros/s/AKfycbxR32x_g713boyToLwCPHbjzh9GYrvHvkLoqHMTqoxcE7Sg0yoD7ltlJYB89wAC998/exec"
   }
 ];
 
