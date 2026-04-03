@@ -4353,6 +4353,11 @@ const TOOLS = [
     name: "Frictionless Brain Dump",
     description: `The Frictionless Brain Dump is designed to help you instantly externalize your working memory without the executive function tax of organizing your thoughts on the spot. Whether you have a sudden idea, a looming task, or simply need to process an emotion, just type or dictate your raw thoughts into the single text box and hit save. Every evening at 5:00 PM, the system automatically reviews your raw notes, sorts them into Tasks, Ideas, and Emotional Check-ins, and delivers a clean, organized digest straight to your inbox.`,
     link: "https://script.google.com/macros/s/AKfycby0zEDm3-rAxn62BpX9z2k3gIZMqr1VweCDjN-TO6z7aPvt1wGof0dX7ReaVwiELkY/exec"
+  },
+  {
+    name: "Dear Man Batting Cage",
+    description: `The DEAR MAN Batting Cage is a safe, zero-pressure environment to practice the Dialectical Behavior Therapy (DBT) framework for effective communication. To build your skills, start by logging past or upcoming interpersonal challenges in the Tracker tab to isolate the facts from your emotional responses. When you are ready to test a scenario, switch to the Practice tab to roleplay the interaction with an AI partner who adapts to your approach and provides a real-time DEAR MAN scorecard. Over time, the Analysis dashboard will review your recent "at-bats" to identify patterns in your communication, highlighting your strengths and gently pointing out areas for improvement.`,
+    link: "https://script.google.com/macros/s/AKfycbxTJxSijHyWlmXyRBCwtKRssaxQ3R6Ks7qcqHOvp3QNYeln8CZgJY1jdamwGEnOorbS/exec"
   }
 ];
 
