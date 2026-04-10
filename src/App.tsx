@@ -31,6 +31,8 @@ import {
   FolderOpen,
   ShieldCheck,
   FileCheck,
+  Activity,
+  ClipboardCheck,
   ArrowRight,
   ArrowLeft,
   Wrench
@@ -126,11 +128,21 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
     },
     operationType,
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }
 
 // --- Types ---
@@ -205,6 +217,42 @@ interface Message {
   isRead: boolean;
   type: 'text' | 'system';
   metadata?: any;
+}
+
+interface Goal {
+  id: string;
+  clientUid: string;
+  title: string;
+  description?: string;
+  targetDate?: string;
+  status: 'active' | 'completed' | 'archived';
+  progress: number;
+  createdAt: any;
+}
+
+interface Habit {
+  id: string;
+  clientUid: string;
+  name: string;
+  frequency?: string;
+  reportingType: 'binary' | 'count' | 'minutes' | 'miles' | 'percent' | 'servings';
+  targetValue?: number;
+  streak: number;
+  lastCompleted?: string;
+  history?: Record<string, any>;
+  createdAt: any;
+}
+
+interface SubjectiveMetric {
+  id: string;
+  clientUid: string;
+  name: string;
+  scaleMax: 5 | 7 | 10;
+  lowAnchor: string;
+  highAnchor: string;
+  lastCompleted?: string;
+  history?: Record<string, number>;
+  createdAt: any;
 }
 
 const isCalendarId = (email: string) => {
@@ -285,6 +333,662 @@ const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; v
     </span>
   );
 };
+
+// --- Coaching Dashboard Component ---
+
+function CoachingDashboardView({ client, onBack }: { client: any; onBack: () => void }) {
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [metrics, setMetrics] = useState<SubjectiveMetric[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [showHabitModal, setShowHabitModal] = useState(false);
+  const [showMetricModal, setShowMetricModal] = useState(false);
+  const [newGoal, setNewGoal] = useState({ title: '', description: '', targetDate: '', progress: 0 });
+  const [newHabit, setNewHabit] = useState({ 
+    name: '', 
+    frequency: 'Daily', 
+    reportingType: 'binary' as Habit['reportingType'],
+    targetValue: 0 
+  });
+  const [newMetric, setNewMetric] = useState({
+    name: '',
+    scaleMax: 5 as 5 | 7 | 10,
+    lowAnchor: '',
+    highAnchor: ''
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!client?.uid) return;
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('clientUid', '==', client.uid),
+      orderBy('createdAt', 'desc')
+    );
+
+    const habitsQuery = query(
+      collection(db, 'habits'),
+      where('clientUid', '==', client.uid)
+    );
+
+    const metricsQuery = query(
+      collection(db, 'subjective_metrics'),
+      where('clientUid', '==', client.uid),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubGoals = onSnapshot(goalsQuery, (snapshot) => {
+      setGoals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal)));
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'goals');
+    });
+
+    const unsubHabits = onSnapshot(habitsQuery, (snapshot) => {
+      setHabits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Habit)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'habits');
+    });
+
+    const unsubMetrics = onSnapshot(metricsQuery, (snapshot) => {
+      setMetrics(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SubjectiveMetric)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'subjective_metrics');
+    });
+
+    return () => {
+      unsubGoals();
+      unsubHabits();
+      unsubMetrics();
+    };
+  }, [client.uid]);
+
+  const handleAddGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newGoal.title) return;
+    setIsSaving(true);
+    try {
+      const goalData: any = {
+        clientUid: client.uid,
+        title: newGoal.title,
+        description: newGoal.description,
+        status: 'active',
+        progress: Number(newGoal.progress),
+        createdAt: serverTimestamp()
+      };
+
+      if (newGoal.targetDate) {
+        goalData.targetDate = newGoal.targetDate;
+      }
+
+      await addDoc(collection(db, 'goals'), goalData);
+      setShowGoalModal(false);
+      setNewGoal({ title: '', description: '', targetDate: '', progress: 0 });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'goals');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAddHabit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newHabit.name) return;
+    setIsSaving(true);
+    try {
+      const habitData: any = {
+        clientUid: client.uid,
+        name: newHabit.name,
+        frequency: newHabit.frequency,
+        reportingType: newHabit.reportingType,
+        streak: 0,
+        history: {},
+        createdAt: serverTimestamp()
+      };
+      
+      if (newHabit.reportingType !== 'binary') {
+        habitData.targetValue = Number(newHabit.targetValue);
+      }
+
+      await addDoc(collection(db, 'habits'), habitData);
+      setShowHabitModal(false);
+      setNewHabit({ name: '', frequency: 'Daily', reportingType: 'binary', targetValue: 0 });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'habits');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAddMetric = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMetric.name || !newMetric.lowAnchor || !newMetric.highAnchor) return;
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, 'subjective_metrics'), {
+        clientUid: client.uid,
+        name: newMetric.name,
+        scaleMax: Number(newMetric.scaleMax),
+        lowAnchor: newMetric.lowAnchor,
+        highAnchor: newMetric.highAnchor,
+        history: {},
+        createdAt: serverTimestamp()
+      });
+      setShowMetricModal(false);
+      setNewMetric({ name: '', scaleMax: 5, lowAnchor: '', highAnchor: '' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'subjective_metrics');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const updateGoalProgress = async (goalId: string, progress: number) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        progress: Math.min(100, Math.max(0, progress)),
+        status: progress >= 100 ? 'completed' : 'active'
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `goals/${goalId}`);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <RefreshCw className="w-8 h-8 text-emerald-500 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8 pb-20">
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={onBack}
+            className="p-2 bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h2 className="text-2xl font-bold text-white">Coaching Dashboard</h2>
+            <p className="text-slate-400 mt-1">Strategic overview for <span className="text-emerald-400 font-semibold">{client.displayName}</span></p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button 
+            onClick={() => setShowHabitModal(true)}
+            className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> New Habit
+          </button>
+          <button 
+            onClick={() => setShowMetricModal(true)}
+            className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> New Metric
+          </button>
+          <button 
+            onClick={() => setShowGoalModal(true)}
+            className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-600/20"
+          >
+            <Plus className="w-4 h-4" /> New Goal
+          </button>
+        </div>
+      </header>
+
+      {/* Habit Tracker Section */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-emerald-500" /> Habit Consistency
+          </h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {habits.length > 0 ? habits.map(habit => (
+            <div key={habit.id} className="bg-slate-900 border border-slate-800 p-5 rounded-2xl group relative">
+              <button 
+                onClick={async () => {
+                  if (confirm('Delete this habit?')) {
+                    await deleteDoc(doc(db, 'habits', habit.id));
+                  }
+                }}
+                className="absolute top-4 right-4 p-1 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h4 className="font-bold text-white">{habit.name}</h4>
+                  <div className="flex items-center gap-2 mt-1">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">{habit.frequency || 'Daily'}</p>
+                    <span className="w-1 h-1 bg-slate-700 rounded-full" />
+                    <p className="text-[10px] text-emerald-500 uppercase tracking-wider font-bold">{habit.reportingType}</p>
+                  </div>
+                </div>
+                <div className="bg-emerald-500/10 text-emerald-500 px-3 py-1 rounded-full text-xs font-bold">
+                  {habit.streak} Day Streak
+                </div>
+              </div>
+              <div className="flex gap-1">
+                {[...Array(7)].map((_, i) => (
+                  <div 
+                    key={i} 
+                    className={cn(
+                      "flex-1 h-2 rounded-full",
+                      i < (habit.streak % 7 || (habit.streak > 0 ? 7 : 0)) ? "bg-emerald-500" : "bg-slate-800"
+                    )}
+                  />
+                ))}
+              </div>
+              {habit.reportingType !== 'binary' && habit.targetValue && (
+                <p className="mt-3 text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                  Target: {habit.targetValue} {habit.reportingType}
+                </p>
+              )}
+            </div>
+          )) : (
+            <div className="col-span-full py-10 bg-slate-900/50 border border-dashed border-slate-800 rounded-2xl text-center">
+              <p className="text-slate-500 text-sm">No habits currently being tracked for this client.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Subjective Metrics Section */}
+      <section className="space-y-4">
+        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+          <Activity className="w-5 h-5 text-emerald-500" /> Subjective Metrics
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {metrics.length > 0 ? metrics.map(metric => (
+            <div key={metric.id} className="bg-slate-900 border border-slate-800 p-5 rounded-2xl group relative">
+              <button 
+                onClick={async () => {
+                  if (confirm('Delete this metric?')) {
+                    await deleteDoc(doc(db, 'subjective_metrics', metric.id));
+                  }
+                }}
+                className="absolute top-4 right-4 p-1 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h4 className="font-bold text-white">{metric.name}</h4>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold mt-1">Scale: 1-{metric.scaleMax}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[8px] text-slate-500 uppercase font-bold tracking-widest">
+                  <span>{metric.lowAnchor}</span>
+                  <span>{metric.highAnchor}</span>
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden flex">
+                  {[...Array(metric.scaleMax)].map((_, i) => (
+                    <div key={i} className="flex-1 border-r border-slate-900 last:border-0" />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )) : (
+            <div className="col-span-full py-10 bg-slate-900/50 border border-dashed border-slate-800 rounded-2xl text-center">
+              <p className="text-slate-500 text-sm">No subjective metrics set for this client.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Long Term Goals Section */}
+      <section className="space-y-4">
+        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+          <ArrowRight className="w-5 h-5 text-emerald-500" /> Long-Term Goals & Progress
+        </h3>
+        <div className="grid grid-cols-1 gap-4">
+          {goals.length > 0 ? goals.map(goal => (
+            <div key={goal.id} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl group hover:border-emerald-500/30 transition-all">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-1">
+                    <h4 className="text-xl font-bold text-white">{goal.title}</h4>
+                    <Badge variant={goal.status === 'completed' ? 'success' : 'default'}>
+                      {goal.status}
+                    </Badge>
+                  </div>
+                  <p className="text-slate-400 text-sm">{goal.description}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-1">Target Date</p>
+                  <p className="text-white font-medium">{goal.targetDate ? format(parseISO(goal.targetDate), 'MMM d, yyyy') : 'No date set'}</p>
+                </div>
+              </div>
+              
+              <div className="space-y-3">
+                <div className="flex justify-between items-end">
+                  <p className="text-sm font-bold text-slate-300">Progress</p>
+                  <p className="text-2xl font-black text-emerald-500">{goal.progress}%</p>
+                </div>
+                <div className="relative h-4 bg-slate-800 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${goal.progress}%` }}
+                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full"
+                  />
+                </div>
+                <div className="flex gap-2 pt-2">
+                  {[25, 50, 75, 100].map(val => (
+                    <button
+                      key={val}
+                      onClick={() => updateGoalProgress(goal.id, val)}
+                      className={cn(
+                        "px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all",
+                        goal.progress === val 
+                          ? "bg-emerald-600 text-white" 
+                          : "bg-slate-800 text-slate-500 hover:text-white hover:bg-slate-700"
+                      )}
+                    >
+                      {val}%
+                    </button>
+                  ))}
+                  <div className="flex-1" />
+                  <button 
+                    onClick={async () => {
+                      if (confirm('Are you sure you want to delete this goal?')) {
+                        await deleteDoc(doc(db, 'goals', goal.id));
+                      }
+                    }}
+                    className="p-1 text-slate-600 hover:text-rose-500 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )) : (
+            <div className="py-20 bg-slate-900/50 border border-dashed border-slate-800 rounded-2xl text-center">
+              <FileCheck className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+              <p className="text-slate-500">No goals set yet. Click "New Goal" to begin strategic planning.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Goal Modal */}
+      <AnimatePresence>
+        {showGoalModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isSaving && setShowGoalModal(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <h3 className="text-2xl font-bold text-white mb-6">Set New Strategic Goal</h3>
+              <form onSubmit={handleAddGoal} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Goal Title</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newGoal.title}
+                    onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    placeholder="e.g., Complete Executive Functioning Module"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Description</label>
+                  <textarea 
+                    value={newGoal.description}
+                    onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 h-24"
+                    placeholder="What does success look like?"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Target Date</label>
+                    <input 
+                      type="date" 
+                      value={newGoal.targetDate}
+                      onChange={e => setNewGoal({ ...newGoal, targetDate: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Initial Progress (%)</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      max="100"
+                      value={newGoal.progress}
+                      onChange={e => setNewGoal({ ...newGoal, progress: Number(e.target.value) })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-6">
+                  <button 
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => setShowGoalModal(false)}
+                    className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isSaving}
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                  >
+                    {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    {isSaving ? 'Creating...' : 'Create Goal'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Habit Modal */}
+      <AnimatePresence>
+        {showHabitModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isSaving && setShowHabitModal(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <h3 className="text-2xl font-bold text-white mb-6">Create Customizable Habit</h3>
+              <form onSubmit={handleAddHabit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Habit Name</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newHabit.name}
+                    onChange={e => setNewHabit({ ...newHabit, name: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    placeholder="e.g., Morning Meditation"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Frequency</label>
+                    <select 
+                      value={newHabit.frequency}
+                      onChange={e => setNewHabit({ ...newHabit, frequency: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option>Daily</option>
+                      <option>Weekly</option>
+                      <option>Weekdays</option>
+                      <option>Weekends</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Reporting Type</label>
+                    <select 
+                      value={newHabit.reportingType}
+                      onChange={e => setNewHabit({ ...newHabit, reportingType: e.target.value as Habit['reportingType'] })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="binary">Yes / No</option>
+                      <option value="count">Count (Numerical)</option>
+                      <option value="minutes">Minutes</option>
+                      <option value="miles">Miles</option>
+                      <option value="percent">Percent</option>
+                      <option value="servings">Servings</option>
+                    </select>
+                  </div>
+                </div>
+                {newHabit.reportingType !== 'binary' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Daily Target Value</label>
+                    <input 
+                      type="number" 
+                      value={newHabit.targetValue}
+                      onChange={e => setNewHabit({ ...newHabit, targetValue: Number(e.target.value) })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                )}
+                <div className="flex gap-3 pt-6">
+                  <button 
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => setShowHabitModal(false)}
+                    className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isSaving}
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                  >
+                    {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    {isSaving ? 'Creating...' : 'Create Habit'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Subjective Metric Modal */}
+      <AnimatePresence>
+        {showMetricModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isSaving && setShowMetricModal(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <h3 className="text-2xl font-bold text-white mb-6">Create Subjective Metric</h3>
+              <form onSubmit={handleAddMetric} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Metric Name</label>
+                  <input 
+                    type="text" 
+                    required
+                    placeholder="e.g. Stress Level"
+                    value={newMetric.name}
+                    onChange={e => setNewMetric({ ...newMetric, name: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Scale Range</label>
+                  <select 
+                    value={newMetric.scaleMax}
+                    onChange={e => setNewMetric({ ...newMetric, scaleMax: Number(e.target.value) as any })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value={5}>1 - 5</option>
+                    <option value={7}>1 - 7</option>
+                    <option value={10}>1 - 10</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">Low Anchor (1)</label>
+                    <input 
+                      type="text" 
+                      required
+                      placeholder="e.g. Completely Drained"
+                      value={newMetric.lowAnchor}
+                      onChange={e => setNewMetric({ ...newMetric, lowAnchor: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 tracking-wider">High Anchor ({newMetric.scaleMax})</label>
+                    <input 
+                      type="text" 
+                      required
+                      placeholder="e.g. Fully Charged"
+                      value={newMetric.highAnchor}
+                      onChange={e => setNewMetric({ ...newMetric, highAnchor: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-6">
+                  <button 
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => setShowMetricModal(false)}
+                    className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isSaving}
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                  >
+                    {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    {isSaving ? 'Creating...' : 'Create Metric'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 // --- Messaging Component ---
 const MessagingView = ({ 
@@ -515,9 +1219,11 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
+  const [selectedCoachingClient, setSelectedCoachingClient] = useState<any>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showLateNoticeModal, setShowLateNoticeModal] = useState(false);
+  const [showCheckInModal, setShowCheckInModal] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
@@ -617,6 +1323,9 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedChatClient, setSelectedChatClient] = useState<string | null>(null);
   const [coachProfile, setCoachProfile] = useState<UserProfile | null>(null);
+  const [clientHabits, setClientHabits] = useState<Habit[]>([]);
+  const [clientMetrics, setClientMetrics] = useState<SubjectiveMetric[]>([]);
+  const [habitsLoading, setHabitsLoading] = useState(false);
 
   useEffect(() => {
     let unsubProfile: (() => void) | null = null;
@@ -673,6 +1382,29 @@ export default function App() {
     });
 
     return () => unsubCoach();
+  }, [user, profile]);
+
+  // Fetch client habits and metrics
+  useEffect(() => {
+    if (!user || !profile || profile.role !== 'client') return;
+
+    setHabitsLoading(true);
+    const habitsQuery = query(collection(db, 'habits'), where('clientUid', '==', user.uid));
+    const metricsQuery = query(collection(db, 'subjective_metrics'), where('clientUid', '==', user.uid));
+
+    const unsubHabits = onSnapshot(habitsQuery, (snapshot) => {
+      setClientHabits(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Habit)));
+      setHabitsLoading(false);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'habits'));
+
+    const unsubMetrics = onSnapshot(metricsQuery, (snapshot) => {
+      setClientMetrics(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as SubjectiveMetric)));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'subjective_metrics'));
+
+    return () => {
+      unsubHabits();
+      unsubMetrics();
+    };
   }, [user, profile]);
 
   // Real-time listeners: Appointments
@@ -946,7 +1678,17 @@ export default function App() {
     }
   }, [user?.uid, user?.email, profile?.displayName, requestReason, requestDate]);
 
-  const openAction = React.useCallback((appt: any, type: 'cancel' | 'reschedule') => {
+  const openAction = React.useCallback((appt: any, type: 'cancel' | 'reschedule' | 'coaching-tools') => {
+    if (type === 'coaching-tools') {
+      const client = clients.find((c: any) => c.email === appt.clientEmail);
+      if (client) {
+        setSelectedCoachingClient(client);
+        setActiveTab('coaching-dashboard');
+      } else {
+        alert('Client profile not found for this appointment.');
+      }
+      return;
+    }
     const hoursDiff = differenceInHours(safeToDate(appt.startTime), new Date());
     if (hoursDiff <= 24) {
       setShowLateNoticeModal(true);
@@ -1146,6 +1888,7 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard': return (
         <DashboardView 
+          user={user}
           appointments={appointments} 
           clients={clients} 
           documents={documents} 
@@ -1158,6 +1901,9 @@ export default function App() {
             setSelectedClient(client);
             setActiveTab('clients');
           }}
+          onOpenCheckIn={() => setShowCheckInModal(true)}
+          habits={clientHabits}
+          metrics={clientMetrics}
           notificationPermission={notificationPermission}
           onRequestNotifications={requestNotificationPermission}
         />
@@ -1177,8 +1923,19 @@ export default function App() {
           role={profile?.role} 
           selectedClient={selectedClient}
           setSelectedClient={setSelectedClient}
+          setSelectedCoachingClient={setSelectedCoachingClient}
+          setActiveTab={setActiveTab}
         />
       );
+      case 'coaching-dashboard': return selectedCoachingClient ? (
+        <CoachingDashboardView 
+          client={selectedCoachingClient}
+          onBack={() => {
+            setActiveTab('clients');
+            setSelectedCoachingClient(null);
+          }}
+        />
+      ) : null;
       case 'messages': return (
         <MessagingView
           user={user}
@@ -1626,13 +2383,306 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Daily Check-in Modal */}
+      <AnimatePresence>
+        {showCheckInModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowCheckInModal(false)}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-5xl max-h-[90vh] overflow-y-auto bg-slate-950 border border-slate-800 rounded-[2.5rem] p-8 md:p-12 shadow-2xl scrollbar-hide"
+            >
+              <div className="flex items-center justify-between mb-12">
+                <div>
+                  <h2 className="text-4xl font-bold text-white mb-2">Daily Check-in</h2>
+                  <p className="text-slate-400 text-lg">Complete your daily tracking and reflection.</p>
+                </div>
+                <button 
+                  onClick={() => setShowCheckInModal(false)}
+                  className="p-3 bg-slate-900 text-slate-400 rounded-2xl hover:text-white transition-colors border border-slate-800"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                <div className="space-y-8">
+                  <HabitTrackerView user={user!} />
+                </div>
+                <div className="space-y-8">
+                  <SubjectiveMetricsTrackerView user={user!} />
+                </div>
+              </div>
+
+              <div className="mt-12 pt-8 border-t border-slate-800 flex justify-center">
+                <button 
+                  onClick={() => setShowCheckInModal(false)}
+                  className="px-12 py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-600/20"
+                >
+                  Done for Today
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 // --- View Components ---
 
+// --- Habit Tracker Component ---
+
+function HabitTrackerView({ user }: { user: User }) {
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState<string | null>(null);
+  const [inputValue, setInputValue] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const q = query(collection(db, 'habits'), where('clientUid', '==', user.uid));
+    const unsub = onSnapshot(q, (snapshot) => {
+      setHabits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Habit)));
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'habits');
+    });
+    return () => unsub();
+  }, [user.uid]);
+
+  const handleReport = async (habit: Habit, value: any) => {
+    setSubmitting(habit.id);
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const history = { ...(habit.history || {}), [today]: value };
+    
+    // Calculate streak
+    let streak = 0;
+    let checkDate = new Date();
+    while (true) {
+      const dateStr = format(checkDate, 'yyyy-MM-dd');
+      if (history[dateStr] !== undefined) {
+        streak++;
+        checkDate = addHours(checkDate, -24);
+      } else {
+        break;
+      }
+    }
+
+    try {
+      await updateDoc(doc(db, 'habits', habit.id), {
+        history,
+        streak,
+        lastCompleted: today
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `habits/${habit.id}`);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  if (loading) return <div className="py-10 text-center text-slate-500">Loading habits...</div>;
+  if (habits.length === 0) return null;
+
+  const today = format(new Date(), 'yyyy-MM-dd');
+
+  return (
+    <Card title="Daily Habit Tracker" subtitle="Stay consistent with your goals">
+      <div className="space-y-4">
+        {habits.map(habit => {
+          const isCompletedToday = habit.history?.[today] !== undefined;
+          return (
+            <div key={habit.id} className="bg-slate-800/30 border border-slate-700/30 p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-white">{habit.name}</h4>
+                  {isCompletedToday && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">{habit.frequency || 'Daily'}</p>
+                  <span className="w-1 h-1 bg-slate-700 rounded-full" />
+                  <p className="text-[10px] text-emerald-500 font-bold">{habit.streak} Day Streak</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {habit.reportingType === 'binary' ? (
+                  <button
+                    disabled={submitting === habit.id || isCompletedToday}
+                    onClick={() => handleReport(habit, true)}
+                    className={cn(
+                      "px-6 py-2 rounded-xl font-bold transition-all",
+                      isCompletedToday 
+                        ? "bg-emerald-600/20 text-emerald-500 border border-emerald-500/20" 
+                        : "bg-emerald-600 text-white hover:bg-emerald-500 shadow-lg shadow-emerald-600/20"
+                    )}
+                  >
+                    {submitting === habit.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : isCompletedToday ? 'Completed' : 'Mark Done'}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <input 
+                        type="number"
+                        disabled={submitting === habit.id || isCompletedToday}
+                        placeholder={habit.targetValue?.toString() || "0"}
+                        value={isCompletedToday ? habit.history?.[today] : (inputValue[habit.id] || '')}
+                        onChange={e => setInputValue({ ...inputValue, [habit.id]: e.target.value })}
+                        className="w-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-sm focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-500 uppercase">
+                        {habit.reportingType}
+                      </span>
+                    </div>
+                    {!isCompletedToday && (
+                      <button
+                        disabled={submitting === habit.id || !inputValue[habit.id]}
+                        onClick={() => handleReport(habit, Number(inputValue[habit.id]))}
+                        className="bg-emerald-600 text-white p-2 rounded-xl hover:bg-emerald-500 transition-all disabled:opacity-50"
+                      >
+                        {submitting === habit.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function SubjectiveMetricsTrackerView({ user }: { user: User }) {
+  const [metrics, setMetrics] = useState<SubjectiveMetric[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState<string | null>(null);
+  const [values, setValues] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const q = query(collection(db, 'subjective_metrics'), where('clientUid', '==', user.uid));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const fetchedMetrics = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SubjectiveMetric));
+      setMetrics(fetchedMetrics);
+      
+      // Initialize values for sliders if not already set
+      const initialValues: Record<string, number> = {};
+      const today = format(new Date(), 'yyyy-MM-dd');
+      fetchedMetrics.forEach(m => {
+        if (m.history?.[today] !== undefined) {
+          initialValues[m.id] = m.history[today];
+        } else if (values[m.id] === undefined) {
+          initialValues[m.id] = Math.ceil(m.scaleMax / 2);
+        }
+      });
+      setValues(prev => ({ ...initialValues, ...prev }));
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'subjective_metrics');
+    });
+    return () => unsub();
+  }, [user.uid]);
+
+  const handleReport = async (metric: SubjectiveMetric) => {
+    setSubmitting(metric.id);
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const val = values[metric.id] ?? Math.ceil(metric.scaleMax / 2);
+    const history = { ...(metric.history || {}), [today]: val };
+    
+    try {
+      await updateDoc(doc(db, 'subjective_metrics', metric.id), {
+        history,
+        lastCompleted: today
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `subjective_metrics/${metric.id}`);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  if (loading) return <div className="py-10 text-center text-slate-500">Loading metrics...</div>;
+  if (metrics.length === 0) return null;
+
+  const today = format(new Date(), 'yyyy-MM-dd');
+
+  return (
+    <Card title="Subjective Metrics" subtitle="Track how you're feeling today">
+      <div className="space-y-8">
+        {metrics.map(metric => {
+          const isCompletedToday = metric.history?.[today] !== undefined;
+          const currentValue = values[metric.id] ?? Math.ceil(metric.scaleMax / 2);
+
+          return (
+            <div key={metric.id} className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h4 className="font-bold text-white flex items-center gap-2">
+                  {metric.name}
+                  {isCompletedToday && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                </h4>
+                <span className="text-emerald-500 font-mono font-bold bg-emerald-500/10 px-3 py-1 rounded-full text-sm">
+                  {isCompletedToday ? metric.history[today] : currentValue} / {metric.scaleMax}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold tracking-widest">
+                  <span>{metric.lowAnchor}</span>
+                  <span>{metric.highAnchor}</span>
+                </div>
+                <div className="relative pt-2 pb-6">
+                  <input
+                    type="range"
+                    min="1"
+                    max={metric.scaleMax}
+                    step="1"
+                    disabled={submitting === metric.id || isCompletedToday}
+                    value={isCompletedToday ? metric.history[today] : currentValue}
+                    onChange={(e) => setValues({ ...values, [metric.id]: parseInt(e.target.value) })}
+                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  <div className="absolute left-0 right-0 top-6 flex justify-between px-1">
+                    {[...Array(metric.scaleMax)].map((_, i) => (
+                      <div key={i} className="flex flex-col items-center">
+                        <div className="w-0.5 h-1.5 bg-slate-700 mb-1" />
+                        <span className="text-[8px] text-slate-600 font-bold">{i + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {!isCompletedToday && (
+                <button
+                  disabled={submitting === metric.id}
+                  onClick={() => handleReport(metric)}
+                  className="w-full bg-slate-800 text-white py-2 rounded-xl font-bold hover:bg-slate-700 transition-all border border-slate-700 flex items-center justify-center gap-2"
+                >
+                  {submitting === metric.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Log Response
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function DashboardView({ 
+  user,
   appointments, 
   clients, 
   documents, 
@@ -1642,6 +2692,9 @@ function DashboardView({
   onRequestSession, 
   onAction, 
   onSelectClient,
+  onOpenCheckIn,
+  habits = [],
+  metrics = [],
   notificationPermission,
   onRequestNotifications
 }: any) {
@@ -1652,6 +2705,24 @@ function DashboardView({
   const unreadCount = useMemo(() => {
     return messages.filter((m: any) => m.receiverUid === profile?.uid && !m.isRead).length;
   }, [messages, profile]);
+
+  const checkInProgress = useMemo(() => {
+    if (profile?.role !== 'client') return null;
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const total = habits.length + metrics.length;
+    if (total === 0) return null;
+    
+    const completedHabits = habits.filter((h: any) => h.history?.[today] !== undefined).length;
+    const completedMetrics = metrics.filter((m: any) => m.history?.[today] !== undefined).length;
+    const completed = completedHabits + completedMetrics;
+    
+    return {
+      completed,
+      total,
+      percent: Math.round((completed / total) * 100),
+      isDone: completed === total
+    };
+  }, [habits, metrics, profile]);
 
   const stats = [
     profile?.role === 'coach' 
@@ -1703,6 +2774,93 @@ function DashboardView({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Daily Check-in Card for Clients */}
+        {profile?.role === 'client' && (
+          <div className="lg:col-span-2">
+            <motion.button
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              onClick={onOpenCheckIn}
+              className={cn(
+                "w-full p-6 rounded-[2rem] shadow-xl text-left relative overflow-hidden group transition-all duration-500",
+                checkInProgress?.isDone 
+                  ? "bg-slate-900 border border-emerald-500/30 shadow-emerald-500/5" 
+                  : "bg-gradient-to-br from-emerald-600 to-teal-700 shadow-emerald-900/20"
+              )}
+            >
+              <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:scale-110 transition-transform duration-700">
+                <ClipboardCheck className="w-32 h-32 text-white" />
+              </div>
+              
+              <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="max-w-xl">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={cn(
+                      "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest",
+                      checkInProgress?.isDone ? "bg-emerald-500/20 text-emerald-400" : "bg-white/20 text-white"
+                    )}>
+                      {checkInProgress?.isDone ? 'Check-in Complete' : 'Daily Action Required'}
+                    </div>
+                    {checkInProgress?.isDone && (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                    )}
+                  </div>
+                  <h3 className="text-2xl md:text-3xl font-bold text-white mb-2">
+                    {checkInProgress?.isDone ? "You're all set!" : "Daily Check-in"}
+                  </h3>
+                  <p className={cn(
+                    "text-base leading-relaxed opacity-90",
+                    checkInProgress?.isDone ? "text-slate-400" : "text-emerald-50/80"
+                  )}>
+                    {checkInProgress?.isDone 
+                      ? "Great job staying consistent today. Your coach has been updated on your progress."
+                      : "Log your habits and track your metrics for today. Consistency is the key to progress!"}
+                  </p>
+                </div>
+
+                <div className="shrink-0 flex flex-col items-center md:items-end gap-3">
+                  {checkInProgress && (
+                    <div className="text-center md:text-right">
+                      <div className="text-3xl font-black text-white mb-1">
+                        {checkInProgress.completed}<span className="text-lg opacity-50 font-medium ml-1">/ {checkInProgress.total}</span>
+                      </div>
+                      <p className={cn(
+                        "text-[10px] font-bold uppercase tracking-widest",
+                        checkInProgress?.isDone ? "text-emerald-500" : "text-emerald-200"
+                      )}>
+                        Tasks Completed
+                      </p>
+                    </div>
+                  )}
+                  <div className={cn(
+                    "px-6 py-3 rounded-2xl font-bold text-base flex items-center gap-2 transition-all shadow-lg",
+                    checkInProgress?.isDone 
+                      ? "bg-slate-800 text-slate-300 hover:bg-slate-700" 
+                      : "bg-white text-emerald-700 hover:shadow-white/10"
+                  )}>
+                    {checkInProgress?.isDone ? (
+                      <>Review Check-in <ArrowRight className="w-4 h-4" /></>
+                    ) : (
+                      <>Start Check-in <Plus className="w-5 h-5" /></>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              {checkInProgress && (
+                <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/10">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${checkInProgress.percent}%` }}
+                    className="h-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]"
+                  />
+                </div>
+              )}
+            </motion.button>
+          </div>
+        )}
+
         {/* Next Appointment */}
         <Card 
           title="Next Appointment" 
@@ -2072,6 +3230,16 @@ function AppointmentCard({ appt, role, onAction }: any) {
         <p className="text-sm text-slate-500 mt-4 pl-20 border-l-2 border-slate-700 italic">
           {appt.description}
         </p>
+      )}
+      {role === 'coach' && !isCalendarId(appt.clientEmail) && (
+        <div className="flex gap-3 mt-4 pl-20">
+          <button 
+            onClick={() => onAction(appt, 'coaching-tools')}
+            className="flex items-center gap-2 text-xs font-bold text-emerald-500 hover:text-emerald-400 transition-colors uppercase tracking-wider"
+          >
+            <Wrench className="w-3 h-3" /> Coaching Tools
+          </button>
+        </div>
       )}
       {role === 'client' && appt.status === 'scheduled' && (
         <div className="flex gap-3 mt-4 pl-20">
@@ -2928,7 +4096,16 @@ function OnboardingView({ user, onComplete }: { user: User, onComplete: () => vo
   );
 }
 
-function ClientsView({ clients, appointments, documents, role, selectedClient, setSelectedClient }: any) {
+function ClientsView({ 
+  clients, 
+  appointments, 
+  documents, 
+  role, 
+  selectedClient, 
+  setSelectedClient,
+  setSelectedCoachingClient,
+  setActiveTab
+}: any) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -3719,16 +4896,28 @@ function ClientsView({ clients, appointments, documents, role, selectedClient, s
                   <p className="text-slate-400">{selectedClient.email}</p>
                   {selectedClient.phone && <p className="text-slate-400 text-sm mt-1">{selectedClient.phone}</p>}
                 </div>
-                <button 
-                  onClick={() => {
-                    setEditData({ ...selectedClient });
-                    setIsEditing(true);
-                    setSelectedClient(null);
-                  }}
-                  className="p-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 transition-colors flex items-center gap-2"
-                >
-                  <Edit2 className="w-4 h-4" /> Edit
-                </button>
+                <div className="flex flex-col gap-2">
+                  <button 
+                    onClick={() => {
+                      setSelectedCoachingClient(selectedClient);
+                      setActiveTab('coaching-dashboard');
+                      setSelectedClient(null);
+                    }}
+                    className="p-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 transition-colors flex items-center gap-2 font-bold text-sm shadow-lg shadow-emerald-600/20"
+                  >
+                    <Wrench className="w-4 h-4" /> Coaching Tools
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setEditData({ ...selectedClient });
+                      setIsEditing(true);
+                      setSelectedClient(null);
+                    }}
+                    className="p-3 bg-slate-800 text-slate-300 rounded-xl hover:bg-slate-700 transition-colors flex items-center gap-2 font-bold text-sm"
+                  >
+                    <Edit2 className="w-4 h-4" /> Edit Profile
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4 mb-8">

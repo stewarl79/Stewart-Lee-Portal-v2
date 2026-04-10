@@ -117,6 +117,42 @@
       },
       "required": ["title", "driveFileId", "webViewLink", "clientUid", "coachUid", "createdAt"]
     },
+    "Goal": {
+      "title": "Goal",
+      "description": "A long-term goal for a client.",
+      "type": "object",
+      "properties": {
+        "clientUid": { "type": "string", "description": "Client's UID" },
+        "title": { "type": "string", "description": "Goal title" },
+        "description": { "type": "string", "description": "Goal description" },
+        "targetDate": { "type": "string", "format": "date-time", "description": "Target completion date" },
+        "status": { "type": "string", "enum": ["active", "completed", "archived"], "description": "Goal status" },
+        "progress": { "type": "number", "description": "Progress percentage (0-100)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation time" }
+      },
+      "required": ["clientUid", "title", "status", "progress", "createdAt"]
+    },
+    "Habit": {
+      "title": "Habit",
+      "description": "A habit tracked by a client.",
+      "type": "object",
+      "properties": {
+        "clientUid": { "type": "string", "description": "Client's UID" },
+        "name": { "type": "string", "description": "Habit name" },
+        "frequency": { "type": "string", "description": "Frequency (e.g., daily, weekly)" },
+        "reportingType": { 
+          "type": "string", 
+          "enum": ["binary", "count", "minutes", "miles", "percent", "servings"],
+          "description": "How the habit is reported"
+        },
+        "targetValue": { "type": "number", "description": "Target value for non-binary habits" },
+        "streak": { "type": "number", "description": "Current streak" },
+        "lastCompleted": { "type": "string", "format": "date-time", "description": "Last completion time" },
+        "history": { "type": "object", "description": "Map of dates to completion status or numerical value" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation time" }
+      },
+      "required": ["clientUid", "name", "reportingType", "streak", "createdAt"]
+    },
     "SyncConfig": {
       "title": "Sync Configuration",
       "description": "Dynamic scheduling settings for background tasks.",
@@ -158,6 +194,14 @@
     "/private_notes/{noteId}": {
       "schema": "PrivateNote",
       "description": "Metadata for private session notes in Drive"
+    },
+    "/goals/{goalId}": {
+      "schema": "Goal",
+      "description": "Client goals"
+    },
+    "/habits/{habitId}": {
+      "schema": "Habit",
+      "description": "Client habits"
     },
     "/settings/sync_config": {
       "schema": "SyncConfig",

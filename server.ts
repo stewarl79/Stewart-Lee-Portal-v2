@@ -1283,11 +1283,115 @@ TO FIX THIS:
     }
   }
 
+  async function checkHabitInactivity() {
+    console.log("Checking for habit inactivity...");
+    try {
+      const now = new Date();
+      const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+      const threeDaysAgoStr = threeDaysAgo.toISOString().split('T')[0];
+
+      // Check Habits
+      const habitsSnapshot = await db.collection("habits").get();
+      for (const habitDoc of habitsSnapshot.docs) {
+        const habit = habitDoc.data();
+        const lastCompleted = habit.lastCompleted;
+
+        if (!lastCompleted || lastCompleted < threeDaysAgoStr) {
+          const clientUid = habit.clientUid;
+          const subDoc = await db.collection("push_subscriptions").doc(clientUid).get();
+          
+          if (subDoc.exists) {
+            const { subscription } = subDoc.data()!;
+            const payload = JSON.stringify({
+              title: "Inactivity Reminder",
+              body: `We haven't seen any progress on your habit "${habit.name}" for 3 days. You've got this!`,
+              data: { url: "/dashboard" }
+            });
+            try {
+              await webpush.sendNotification(subscription, payload);
+              console.log(`Sent inactivity reminder to ${clientUid} for habit ${habit.name}`);
+            } catch (e) {
+              console.error(`Failed to send push to ${clientUid}:`, e);
+            }
+          }
+        }
+      }
+
+      // Check Subjective Metrics
+      const metricsSnapshot = await db.collection("subjective_metrics").get();
+      for (const metricDoc of metricsSnapshot.docs) {
+        const metric = metricDoc.data();
+        const lastCompleted = metric.lastCompleted;
+
+        if (!lastCompleted || lastCompleted < threeDaysAgoStr) {
+          const clientUid = metric.clientUid;
+          const subDoc = await db.collection("push_subscriptions").doc(clientUid).get();
+          
+          if (subDoc.exists) {
+            const { subscription } = subDoc.data()!;
+            const payload = JSON.stringify({
+              title: "Inactivity Reminder",
+              body: `We haven't seen an update on your "${metric.name}" metric for 3 days. How are you feeling?`,
+              data: { url: "/dashboard" }
+            });
+            try {
+              await webpush.sendNotification(subscription, payload);
+              console.log(`Sent inactivity reminder to ${clientUid} for metric ${metric.name}`);
+            } catch (e) {
+              console.error(`Failed to send push to ${clientUid}:`, e);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Habit/Metric inactivity check failed:", error);
+    }
+  }
+
+  async function sendDailyHabitPrompts() {
+    console.log("Sending daily habit/metric prompts...");
+    try {
+      const usersSnapshot = await db.collection("users").where("role", "==", "client").get();
+      for (const userDoc of usersSnapshot.docs) {
+        const userId = userDoc.id;
+        const habitsSnapshot = await db.collection("habits").where("clientUid", "==", userId).get();
+        const metricsSnapshot = await db.collection("subjective_metrics").where("clientUid", "==", userId).get();
+        
+        if (!habitsSnapshot.empty || !metricsSnapshot.empty) {
+          const subDoc = await db.collection("push_subscriptions").doc(userId).get();
+          if (subDoc.exists) {
+            const { subscription } = subDoc.data()!;
+            const payload = JSON.stringify({
+              title: "Daily Check-in",
+              body: "Time to log your habits and metrics for today! Consistency is key.",
+              data: { url: "/dashboard" }
+            });
+            try {
+              await webpush.sendNotification(subscription, payload);
+            } catch (e) {
+              console.error(`Failed to send push to ${userId}:`, e);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Daily prompts failed:", error);
+    }
+  }
+
   // Cron jobs
   // Run every hour at the top of the hour. 
   // Internal logic in syncCalendar and sendReminders checks settings to decide if it should actually run.
   cron.schedule("0 * * * *", syncCalendar); 
   cron.schedule("0 * * * *", sendReminders); 
+  
+  // Daily checks at 9 AM EST
+  cron.schedule("0 9 * * *", () => {
+    sendDailyHabitPrompts();
+    checkHabitInactivity();
+  }, {
+    timezone: "America/New_York"
+  });
 
   // --- Vite Middleware ---
   if (process.env.NODE_ENV !== "production") {

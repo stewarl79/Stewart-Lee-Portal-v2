@@ -69,6 +69,42 @@ service cloud.firestore {
     //   - createdAt: timestamp (required) - Creation time
     //   - updatedAt: timestamp (optional) - Last update time
     //
+    // Collection: goals
+    // Document ID: {goalId}
+    // Fields:
+    //   - clientUid: string (required) - Client's UID
+    //   - title: string (required, < 200 chars) - Goal title
+    //   - description: string (optional, < 1000 chars) - Goal description
+    //   - targetDate: string (optional, ISO 8601) - Target date
+    //   - status: string (required, enum: ['active', 'completed', 'archived']) - Goal status
+    //   - progress: number (required, 0-100) - Progress percentage
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // Collection: habits
+    // Document ID: {habitId}
+    // Fields:
+    //   - clientUid: string (required) - Client's UID
+    //   - name: string (required, < 100 chars) - Habit name
+    //   - frequency: string (optional) - Frequency
+    //   - reportingType: string (required, enum: ['binary', 'count', 'minutes', 'miles', 'percent', 'servings']) - Reporting type
+    //   - targetValue: number (optional) - Target value
+    //   - streak: number (required) - Current streak
+    //   - lastCompleted: string (optional, ISO 8601) - Last completion time
+    //   - history: map (optional) - History map
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // Collection: subjective_metrics
+    // Document ID: {metricId}
+    // Fields:
+    //   - clientUid: string (required) - Client's UID
+    //   - name: string (required, < 100 chars) - Metric name
+    //   - scaleMax: number (required, enum: [5, 7, 10]) - Max scale value
+    //   - lowAnchor: string (required, < 100 chars) - Label for 1
+    //   - highAnchor: string (required, < 100 chars) - Label for max
+    //   - lastCompleted: string (optional, ISO 8601) - Last completion time
+    //   - history: map (optional) - History map (date -> score)
+    //   - createdAt: timestamp (required) - Creation time
+    //
     // ===============================================================
 
     // ===============================================================
@@ -99,7 +135,7 @@ service cloud.firestore {
     }
 
     function isValidDateString(dateStr) {
-      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+      return dateStr is string && (dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$") || dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$"));
     }
 
     function isValidTimestamp(ts) {
@@ -183,6 +219,45 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidGoal(data) {
+      return data.keys().hasAll(['clientUid', 'title', 'status', 'progress', 'createdAt']) &&
+             hasOnlyAllowedFields(['clientUid', 'title', 'description', 'targetDate', 'status', 'progress', 'createdAt']) &&
+             data.clientUid is string &&
+             data.title is string && data.title.size() < 200 &&
+             (!('description' in data) || (data.description is string && data.description.size() < 1000)) &&
+             (!('targetDate' in data) || isValidDateString(data.targetDate)) &&
+             data.status in ['active', 'completed', 'archived'] &&
+             data.progress is number && data.progress >= 0 && data.progress <= 100 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidHabit(data) {
+      return data.keys().hasAll(['clientUid', 'name', 'reportingType', 'streak', 'createdAt']) &&
+             hasOnlyAllowedFields(['clientUid', 'name', 'frequency', 'reportingType', 'targetValue', 'streak', 'lastCompleted', 'history', 'createdAt']) &&
+             data.clientUid is string &&
+             data.name is string && data.name.size() < 100 &&
+             (!('frequency' in data) || data.frequency is string) &&
+             data.reportingType in ["binary", "count", "minutes", "miles", "percent", "servings"] &&
+             (!('targetValue' in data) || data.targetValue is number) &&
+             data.streak is number &&
+             (!('lastCompleted' in data) || isValidDateString(data.lastCompleted)) &&
+             (!('history' in data) || data.history is map) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidSubjectiveMetric(data) {
+      return data.keys().hasAll(['clientUid', 'name', 'scaleMax', 'lowAnchor', 'highAnchor', 'createdAt']) &&
+             hasOnlyAllowedFields(['clientUid', 'name', 'scaleMax', 'lowAnchor', 'highAnchor', 'lastCompleted', 'history', 'createdAt']) &&
+             data.clientUid is string &&
+             data.name is string && data.name.size() < 100 &&
+             data.scaleMax in [5, 7, 10] &&
+             data.lowAnchor is string && data.lowAnchor.size() < 100 &&
+             data.highAnchor is string && data.highAnchor.size() < 100 &&
+             (!('lastCompleted' in data) || isValidDateString(data.lastCompleted)) &&
+             (!('history' in data) || data.history is map) &&
+             data.createdAt is timestamp;
+    }
+
     function isValidSyncConfig(data) {
       return data.keys().hasAll(['calendarSyncHours', 'reminderStartHour', 'reminderEndHour', 'catchAllAfterEnd']) &&
              hasOnlyAllowedFields(['calendarSyncHours', 'reminderStartHour', 'reminderEndHour', 'catchAllAfterEnd']) &&
@@ -260,6 +335,36 @@ service cloud.firestore {
       allow create: if isCoach() && isValidPrivateNote(request.resource.data);
       allow update: if isCoach() && isValidPrivateNote(request.resource.data);
       allow delete: if isCoach();
+    }
+
+    match /goals/{goalId} {
+      // Coaches can see all goals. Clients can only see their own.
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.clientUid);
+      
+      // Coaches and owners can manage goals.
+      allow create: if isAuthenticated() && isValidGoal(request.resource.data) && (isCoach() || request.auth.uid == request.resource.data.clientUid);
+      allow update: if isAuthenticated() && isValidGoal(request.resource.data) && (isCoach() || request.auth.uid == resource.data.clientUid);
+      allow delete: if isCoach() || (isAuthenticated() && request.auth.uid == resource.data.clientUid);
+    }
+
+    match /habits/{habitId} {
+      // Coaches can see all habits. Clients can only see their own.
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.clientUid);
+      
+      // Coaches and owners can manage habits.
+      allow create: if isAuthenticated() && isValidHabit(request.resource.data) && (isCoach() || request.auth.uid == request.resource.data.clientUid);
+      allow update: if isAuthenticated() && isValidHabit(request.resource.data) && (isCoach() || request.auth.uid == resource.data.clientUid);
+      allow delete: if isCoach() || (isAuthenticated() && request.auth.uid == resource.data.clientUid);
+    }
+
+    match /subjective_metrics/{metricId} {
+      // Coaches can see all metrics. Clients can only see their own.
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.clientUid);
+      
+      // Coaches and owners can manage metrics.
+      allow create: if isAuthenticated() && isValidSubjectiveMetric(request.resource.data) && (isCoach() || request.auth.uid == request.resource.data.clientUid);
+      allow update: if isAuthenticated() && isValidSubjectiveMetric(request.resource.data) && (isCoach() || request.auth.uid == resource.data.clientUid);
+      allow delete: if isCoach() || (isAuthenticated() && request.auth.uid == resource.data.clientUid);
     }
 
     match /messages/{messageId} {
