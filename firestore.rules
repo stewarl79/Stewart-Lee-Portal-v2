@@ -311,6 +311,44 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidLibraryGoal(data) {
+      return data.keys().hasAll(['text', 'coachUid']) &&
+             hasOnlyAllowedFields(['text', 'coachUid', 'usageCount']) &&
+             data.text is string && data.text.size() < 500 &&
+             data.coachUid == request.auth.uid;
+    }
+
+    function isValidLibraryObjective(data) {
+      return data.keys().hasAll(['text', 'goalText', 'coachUid']) &&
+             hasOnlyAllowedFields(['text', 'goalText', 'coachUid', 'usageCount']) &&
+             data.text is string && data.text.size() < 1000 &&
+             data.goalText is string && data.goalText.size() < 500 &&
+             data.coachUid == request.auth.uid;
+    }
+
+    function isValidTreatmentPlan(data) {
+      return data.keys().hasAll(['clientUid', 'coachUid', 'goalTitle', 'objectives', 'status', 'createdAt']) &&
+             hasOnlyAllowedFields(['clientUid', 'coachUid', 'goalTitle', 'objectives', 'status', 'createdAt', 'updatedAt']) &&
+             data.clientUid is string &&
+             data.coachUid == request.auth.uid &&
+             data.goalTitle is string && data.goalTitle.size() < 500 &&
+             data.objectives is list &&
+             data.status in ['active', 'completed', 'archived'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidABCReframing(data) {
+      return data.keys().hasAll(['clientUid', 'coachUid', 'situation', 'thoughts', 'consequences', 'createdAt']) &&
+             hasOnlyAllowedFields(['clientUid', 'coachUid', 'situation', 'thoughts', 'consequences', 'reframe', 'createdAt', 'updatedAt']) &&
+             data.clientUid is string &&
+             data.coachUid is string &&
+             data.situation is string && data.situation.size() < 2000 &&
+             data.thoughts is string && data.thoughts.size() < 2000 &&
+             data.consequences is string && data.consequences.size() < 2000 &&
+             (!('reframe' in data) || (data.reframe is string && data.reframe.size() < 2000)) &&
+             data.createdAt is timestamp;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -460,6 +498,13 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.clientUid);
       allow write: if isCoach() && isValidTreatmentPlan(request.resource.data);
       allow delete: if isCoach();
+    }
+
+    match /abc_reframing/{reframingId} {
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.clientUid);
+      allow create: if isAuthenticated() && isValidABCReframing(request.resource.data) && (isCoach() || request.auth.uid == request.resource.data.clientUid);
+      allow update: if isAuthenticated() && isValidABCReframing(request.resource.data) && (isCoach() || request.auth.uid == resource.data.clientUid);
+      allow delete: if isCoach() || (isAuthenticated() && request.auth.uid == resource.data.clientUid);
     }
   }
 }

@@ -31,6 +31,7 @@ import {
   FolderOpen,
   ShieldCheck,
   FileCheck,
+  Save,
   Activity,
   ClipboardCheck,
   ArrowRight,
@@ -312,6 +313,34 @@ interface TreatmentPlan {
   updatedAt?: any;
 }
 
+interface ABCReframing {
+  id: string;
+  clientUid: string;
+  coachUid: string;
+  situation: string;
+  thoughts: string;
+  consequences: string;
+  realisticReflection: string;
+  futureReflection: string;
+  createdAt: any;
+  updatedAt?: any;
+}
+
+interface LibraryGoal {
+  id: string;
+  text: string;
+  coachUid: string;
+  usageCount?: number;
+}
+
+interface LibraryObjective {
+  id: string;
+  text: string;
+  goalText: string;
+  coachUid: string;
+  usageCount?: number;
+}
+
 const isCalendarId = (email: string) => {
   return email.includes('calendar.google.com');
 };
@@ -424,6 +453,23 @@ function TreatmentPlanModule({ client, user }: { client: any; user: any }) {
       setNewPlanObjectives([]);
     }
   }, [editingPlan]);
+
+  useEffect(() => {
+    const qGoals = query(collection(db, 'library_goals'));
+    const qObjs = query(collection(db, 'library_objectives'));
+    
+    const unsubGoals = onSnapshot(qGoals, (snapshot) => {
+      setLibraryGoals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LibraryGoal)));
+    });
+    const unsubObjs = onSnapshot(qObjs, (snapshot) => {
+      setLibraryObjectives(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LibraryObjective)));
+    });
+    
+    return () => {
+      unsubGoals();
+      unsubObjs();
+    };
+  }, []);
 
   useEffect(() => {
     const qGoals = query(collection(db, 'library_goals'));
@@ -793,6 +839,365 @@ function TreatmentPlanModule({ client, user }: { client: any; user: any }) {
   );
 }
 
+function ABCReframingModal({ client, user, isOpen, onClose, entry }: { client: any; user: any; isOpen: boolean; onClose: () => void; entry?: ABCReframing | null }) {
+  const [formData, setFormData] = useState({
+    situation: '',
+    thoughts: '',
+    consequences: '',
+    realisticReflection: '',
+    futureReflection: ''
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (entry) {
+      setFormData({
+        situation: entry.situation,
+        thoughts: entry.thoughts,
+        consequences: entry.consequences || '',
+        realisticReflection: entry.realisticReflection || '',
+        futureReflection: entry.futureReflection || ''
+      });
+    } else {
+      setFormData({ situation: '', thoughts: '', consequences: '', realisticReflection: '', futureReflection: '' });
+    }
+  }, [entry, isOpen]);
+
+  const handleSave = async () => {
+    if (!formData.situation || !formData.thoughts || !formData.consequences) return;
+    setIsSaving(true);
+
+    const data = {
+      clientUid: client.uid,
+      coachUid: user.uid,
+      ...formData,
+      updatedAt: serverTimestamp()
+    };
+
+    try {
+      if (entry) {
+        await updateDoc(doc(db, 'abc_reframing', entry.id), data);
+      } else {
+        await addDoc(collection(db, 'abc_reframing'), {
+          ...data,
+          createdAt: serverTimestamp()
+        });
+      }
+      onClose();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'abc_reframing');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-black/90 backdrop-blur-md"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            className="relative w-full max-w-4xl bg-brand-surface border border-slate-800 rounded-3xl p-8 shadow-2xl overflow-y-auto max-h-[90vh]"
+          >
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-12 h-12 bg-brand-accent/10 rounded-2xl flex items-center justify-center text-brand-accent">
+                <Activity className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold text-white tracking-tight">ABC Cognitive Worksheet</h3>
+                <p className="text-slate-400 text-sm">{entry ? 'Edit your worksheet' : 'Identify and externalize stuck points'}</p>
+              </div>
+            </div>
+
+            <div className="space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-xs font-black text-slate-500 uppercase tracking-widest px-1">
+                    <span className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-white text-[10px]">A</span>
+                    Activating Event
+                  </label>
+                  <p className="text-[10px] text-slate-500 font-medium px-1 italic">"Something happens"</p>
+                  <textarea 
+                    value={formData.situation}
+                    onChange={e => setFormData({...formData, situation: e.target.value})}
+                    placeholder="Describe the facts of the event..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-2xl px-5 py-4 text-white text-sm focus:ring-2 focus:ring-brand-accent transition-all min-h-[150px] resize-none"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-xs font-black text-amber-500 uppercase tracking-widest px-1">
+                    <span className="w-6 h-6 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500 text-[10px]">B</span>
+                    Belief / Stuck Point
+                  </label>
+                  <p className="text-[10px] text-amber-500/60 font-medium px-1 italic">"I tell myself something"</p>
+                  <textarea 
+                    value={formData.thoughts}
+                    onChange={e => setFormData({...formData, thoughts: e.target.value})}
+                    placeholder="What did you tell yourself about the situation?"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-2xl px-5 py-4 text-white text-sm focus:ring-2 focus:ring-amber-500 transition-all min-h-[150px] resize-none"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-xs font-black text-indigo-500 uppercase tracking-widest px-1">
+                    <span className="w-6 h-6 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500 text-[10px]">C</span>
+                    Consequence
+                  </label>
+                  <p className="text-[10px] text-indigo-500/60 font-medium px-1 italic">"I feel something"</p>
+                  <textarea 
+                    value={formData.consequences}
+                    onChange={e => setFormData({...formData, consequences: e.target.value})}
+                    placeholder="How did you feel or react?"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-2xl px-5 py-4 text-white text-sm focus:ring-2 focus:ring-indigo-500 transition-all min-h-[150px] resize-none"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-6 pt-6 border-t border-slate-800">
+                <div className="space-y-3">
+                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest px-1">
+                    Are my thoughts above in column B realistic or helpful?
+                  </label>
+                  <textarea 
+                    value={formData.realisticReflection}
+                    onChange={e => setFormData({...formData, realisticReflection: e.target.value})}
+                    placeholder="Evaluate your beliefs..."
+                    className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl px-5 py-4 text-white text-sm focus:ring-2 focus:ring-brand-accent transition-all min-h-[80px]"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest px-1">
+                    What can I tell myself on such occasions in the future?
+                  </label>
+                  <textarea 
+                    value={formData.futureReflection}
+                    onChange={e => setFormData({...formData, futureReflection: e.target.value})}
+                    placeholder="Write a more balanced perspective for next time..."
+                    className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl px-5 py-4 text-white text-sm focus:ring-2 focus:ring-brand-accent transition-all min-h-[80px]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button 
+                  onClick={onClose}
+                  className="flex-1 py-4 bg-slate-800 text-slate-300 rounded-2xl font-bold hover:bg-slate-700 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleSave}
+                  disabled={isSaving || !formData.situation || !formData.thoughts || !formData.consequences}
+                  className="flex-1 py-4 bg-brand-accent text-white rounded-2xl font-bold hover:bg-brand-secondary transition-all shadow-lg shadow-brand-accent/20 flex items-center justify-center gap-2"
+                >
+                  {isSaving ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                  {entry ? 'Update Entry' : 'Save Entry'}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function ABCReframingModule({ client, user }: { client: any; user: any }) {
+  const [entries, setEntries] = useState<ABCReframing[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<ABCReframing | null>(null);
+
+  useEffect(() => {
+    if (!client?.uid) return;
+    const q = query(
+      collection(db, 'abc_reframing'), 
+      where('clientUid', '==', client.uid), 
+      orderBy('createdAt', 'desc')
+    );
+    return onSnapshot(q, (snapshot) => {
+      setEntries(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ABCReframing)));
+    });
+  }, [client.uid]);
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this reframing entry?')) return;
+    try {
+      await deleteDoc(doc(db, 'abc_reframing', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `abc_reframing/${id}`);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+          <Activity className="w-6 h-6 text-brand-accent" /> ABC Cognitive Reframing
+        </h3>
+        <button 
+          onClick={() => {
+            setEditingEntry(null);
+            setIsCreating(true);
+          }}
+          className="px-4 py-2 bg-brand-accent text-white rounded-xl font-bold hover:bg-brand-secondary transition-all flex items-center gap-2 shadow-lg shadow-brand-accent/20"
+        >
+          <Plus className="w-4 h-4" /> New Reframing
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {entries.map(entry => (
+          <div key={entry.id} className="bg-brand-surface border border-slate-800/50 rounded-3xl p-6 shadow-xl relative group">
+            <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+              <button 
+                onClick={() => {
+                  setEditingEntry(entry);
+                  setIsCreating(true);
+                }} 
+                className="p-2 text-slate-400 hover:text-white bg-slate-800/50 rounded-lg"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
+              <button onClick={() => handleDelete(entry.id)} className="p-2 text-slate-400 hover:text-rose-500 bg-slate-800/50 rounded-lg">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              <div className="p-4 bg-slate-800/40 rounded-2xl border border-slate-700/30">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-black text-xs">A</div>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Activating Event</p>
+                </div>
+                <p className="text-sm text-slate-200 leading-relaxed">{entry.situation}</p>
+              </div>
+
+              <div className="p-4 bg-amber-500/5 rounded-2xl border border-amber-500/10">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500 font-black text-xs">B</div>
+                  <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Belief / Stuck Point</p>
+                </div>
+                <p className="text-sm text-slate-200 italic leading-relaxed">"{entry.thoughts}"</p>
+              </div>
+
+              <div className="p-4 bg-indigo-500/5 rounded-2xl border border-indigo-500/10">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500 font-black text-xs">C</div>
+                  <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">Consequence</p>
+                </div>
+                <p className="text-sm text-slate-200 leading-relaxed">{entry.consequences}</p>
+              </div>
+
+              {(entry.realisticReflection || entry.futureReflection) && (
+                <div className="p-5 bg-brand-accent/5 rounded-2xl border border-brand-accent/10 space-y-4">
+                  {entry.realisticReflection && (
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Realistic or Helpful?</p>
+                      <p className="text-sm text-slate-300 leading-relaxed">{entry.realisticReflection}</p>
+                    </div>
+                  )}
+                  {entry.futureReflection && (
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Future Self-Talk</p>
+                      <p className="text-sm text-brand-accent font-medium leading-relaxed">{entry.futureReflection}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {entries.length === 0 && (
+          <div className="col-span-full text-center py-12 bg-slate-900/50 rounded-3xl border border-dashed border-slate-800">
+            <Activity className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+            <p className="text-slate-500">No cognitive reframing entries yet.</p>
+          </div>
+        )}
+      </div>
+
+      <ABCReframingModal 
+        client={client} 
+        user={user} 
+        isOpen={isCreating} 
+        onClose={() => setIsCreating(false)} 
+        entry={editingEntry} 
+      />
+    </div>
+  );
+}
+
+function ABCRoadmapView({ client }: { client: any }) {
+  const [entries, setEntries] = useState<ABCReframing[]>([]);
+
+  useEffect(() => {
+    if (!client?.uid) return;
+    const q = query(
+      collection(db, 'abc_reframing'), 
+      where('clientUid', '==', client.uid), 
+      orderBy('createdAt', 'desc'),
+      limit(3)
+    );
+    return onSnapshot(q, (snapshot) => {
+      setEntries(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ABCReframing)));
+    });
+  }, [client.uid]);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Activity className="w-5 h-5 text-brand-accent" />
+        <h4 className="font-bold text-white tracking-tight">ABC Cognitive Reframing</h4>
+      </div>
+      <div className="grid grid-cols-1 gap-4">
+        {entries.map(entry => (
+          <div key={entry.id} className="bg-brand-surface border border-slate-800 p-5 rounded-3xl shadow-lg hover:border-brand-accent/50 transition-all">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Recent Reframing</p>
+              <p className="text-[10px] text-slate-600 italic">Added {format(safeToDate(entry.createdAt), 'MMM d')}</p>
+            </div>
+            <h5 className="text-white font-bold mb-3 line-clamp-1">{entry.situation}</h5>
+            
+            <div className="space-y-2">
+              <div className="bg-amber-500/5 p-2 rounded-xl border border-amber-500/10">
+                <p className="text-[9px] font-black text-amber-500/50 uppercase tracking-tighter mb-0.5">Thought (B)</p>
+                <p className="text-xs text-slate-400 italic line-clamp-1">"{entry.thoughts}"</p>
+              </div>
+
+              <div className="bg-indigo-500/5 p-2 rounded-xl border border-indigo-500/10">
+                <p className="text-[9px] font-black text-indigo-500/50 uppercase tracking-tighter mb-0.5">Consequence (C)</p>
+                <p className="text-xs text-slate-400 line-clamp-1">{entry.consequences}</p>
+              </div>
+
+              {entry.futureReflection && (
+                <div className="bg-brand-accent/5 p-3 rounded-xl border border-brand-accent/10 flex items-start gap-3">
+                  <Zap className="w-4 h-4 text-brand-accent mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-[9px] font-black text-brand-accent/50 uppercase tracking-tighter mb-0.5">Future Self-Talk</p>
+                    <p className="text-sm text-brand-accent line-clamp-2">{entry.futureReflection}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TreatmentLibraryView() {
   const [goals, setGoals] = useState<LibraryGoal[]>([]);
   const [objectives, setObjectives] = useState<LibraryObjective[]>([]);
@@ -939,6 +1344,7 @@ function CoachingDashboardView({ client, onBack }: { client: any; onBack: () => 
   const [metrics, setMetrics] = useState<SubjectiveMetric[]>([]);
   const [reflectionTemplate, setReflectionTemplate] = useState<ReflectionTemplate | null>(null);
   const [reflections, setReflections] = useState<Reflection[]>([]);
+  const [abcEntries, setAbcEntries] = useState<ABCReframing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [showHabitModal, setShowHabitModal] = useState(false);
@@ -1029,12 +1435,23 @@ function CoachingDashboardView({ client, onBack }: { client: any; onBack: () => 
       setReflections(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Reflection)));
     });
 
+    const abcQuery = query(
+      collection(db, 'abc_reframing'),
+      where('clientUid', '==', client.uid),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubAbc = onSnapshot(abcQuery, (snapshot) => {
+      setAbcEntries(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ABCReframing)));
+    });
+
     return () => {
       unsubGoals();
       unsubHabits();
       unsubMetrics();
       unsubTemplate();
       unsubReflections();
+      unsubAbc();
     };
   }, [client.uid]);
 
@@ -1203,6 +1620,52 @@ function CoachingDashboardView({ client, onBack }: { client: any; onBack: () => 
       </header>
 
       <TreatmentPlanModule client={client} user={auth.currentUser} />
+
+      {abcEntries.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-brand-accent/10 rounded-xl flex items-center justify-center text-brand-accent">
+              <Activity className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-white tracking-tight">ABC Reframing Logs</h3>
+              <p className="text-slate-500 text-xs">Recent cognitive reframing entries from this client</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {abcEntries.map(entry => (
+              <div key={entry.id} className="bg-brand-surface border border-slate-800 p-5 rounded-3xl shadow-lg">
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                    Entry from {format(safeToDate(entry.createdAt), 'MMM d, yyyy')}
+                  </p>
+                </div>
+                
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-[9px] font-black text-slate-600 uppercase mb-1">Situation (A)</p>
+                    <p className="text-xs text-slate-400 line-clamp-2">{entry.situation}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-amber-500/50 uppercase mb-1">Thought (B)</p>
+                    <p className="text-xs text-slate-400 italic font-serif">"{entry.thoughts}"</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-indigo-500/50 uppercase mb-1">Consequence (C)</p>
+                    <p className="text-xs text-slate-400">{entry.consequences}</p>
+                  </div>
+                  {entry.futureReflection && (
+                    <div className="pt-3 border-t border-slate-800">
+                      <p className="text-[9px] font-black text-brand-accent/50 uppercase mb-1">Future Self-Talk</p>
+                      <p className="text-xs text-brand-accent font-medium line-clamp-2">{entry.futureReflection}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Habit Tracker Section */}
       <section className="space-y-4">
@@ -1518,6 +1981,56 @@ function CoachingDashboardView({ client, onBack }: { client: any; onBack: () => 
               className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl max-h-[90vh] overflow-y-auto no-scrollbar"
             >
               <ReflectionResponseViewer reflections={reflections} />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deleteConfirm && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDeleteConfirm(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl text-center"
+            >
+              <div className="w-16 h-16 bg-rose-500/10 text-rose-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <Trash2 className="w-8 h-8" />
+              </div>
+              <h3 className="text-2xl font-bold text-white mb-2">Delete {deleteConfirm.type}?</h3>
+              <p className="text-slate-400 mb-8">
+                Are you sure you want to delete "<span className="text-white font-semibold">{deleteConfirm.name}</span>"? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-medium hover:bg-slate-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={async () => {
+                    try {
+                      await deleteConfirm.onConfirm();
+                      setDeleteConfirm(null);
+                    } catch (error) {
+                      handleFirestoreError(error, OperationType.DELETE, `${deleteConfirm.type}s/${deleteConfirm.id}`);
+                    }
+                  }}
+                  className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-medium hover:bg-rose-500 shadow-lg shadow-rose-600/20 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -2081,9 +2594,16 @@ export default function App() {
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showLateNoticeModal, setShowLateNoticeModal] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
+  const [showABCReframingModal, setShowABCReframingModal] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
+
+  useEffect(() => {
+    const handleOpenABC = () => setShowABCReframingModal(true);
+    window.addEventListener('open-abc-reframing', handleOpenABC);
+    return () => window.removeEventListener('open-abc-reframing', handleOpenABC);
+  }, []);
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -2902,7 +3422,7 @@ export default function App() {
         />
       );
       case 'library': return <LibraryView clients={clients} user={user} />;
-      case 'tools': return <ToolsLibraryView />;
+      case 'tools': return <ToolsLibraryView setActiveTab={setActiveTab} onOpenABC={() => setShowABCReframingModal(true)} />;
       case 'documents': return <DocumentsView documents={documents} role={profile?.role} user={user} />;
       case 'reflection': return (
         clientReflectionTemplate && selectedReflectionAppointment ? (
@@ -3205,6 +3725,15 @@ export default function App() {
         </div>
       </main>
 
+      {profile && (
+        <ABCReframingModal 
+          client={profile} 
+          user={user} 
+          isOpen={showABCReframingModal} 
+          onClose={() => setShowABCReframingModal(false)} 
+        />
+      )}
+
       {/* Request Session Modal */}
       <AnimatePresence>
         {showRequestModal && (
@@ -3418,7 +3947,7 @@ export default function App() {
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
                 <div className="space-y-8">
-                  <HabitTrackerView user={user!} />
+                  <HabitTrackerView user={user!} onOpenABC={() => setShowABCReframingModal(true)} />
                 </div>
                 <div className="space-y-8">
                   <SubjectiveMetricsTrackerView user={user!} />
@@ -3445,7 +3974,7 @@ export default function App() {
 
 // --- Habit Tracker Component ---
 
-function HabitTrackerView({ user }: { user: User }) {
+function HabitTrackerView({ user, onOpenABC }: { user: User; onOpenABC?: () => void }) {
   const [habits, setHabits] = useState<Habit[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<string | null>(null);
@@ -3518,6 +4047,18 @@ function HabitTrackerView({ user }: { user: User }) {
               </div>
 
               <div className="flex items-center gap-3">
+                {habit.name.toLowerCase().includes('abc reframe') && (
+                  <button
+                    onClick={() => {
+                      if (onOpenABC) onOpenABC();
+                      else window.dispatchEvent(new CustomEvent('open-abc-reframing'));
+                    }}
+                    className="p-2 text-brand-accent hover:bg-brand-accent/10 rounded-xl transition-all"
+                    title="Open ABC Reframing Tool"
+                  >
+                    <Activity className="w-5 h-5" />
+                  </button>
+                )}
                 {habit.reportingType === 'binary' ? (
                   <button
                     disabled={submitting === habit.id || isCompletedToday}
@@ -4010,11 +4551,11 @@ function DashboardView({
         ))}
       </div>
 
-      {profile?.role === 'client' && (
-        <RoadmapView client={profile} />
-      )}
+        {profile?.role === 'client' && (
+          <ABCRoadmapView client={profile} />
+        )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Daily Check-in Card for Clients */}
         {profile?.role === 'client' && (
           <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -6799,10 +7340,17 @@ const TOOLS = [
     icon: MessageSquare,
     description: `The DEAR MAN Batting Cage is a safe, zero-pressure environment to practice the Dialectical Behavior Therapy (DBT) framework for effective communication. To build your skills, start by logging past or upcoming interpersonal challenges in the Tracker tab to isolate the facts from your emotional responses. When you are ready to test a scenario, switch to the Practice tab to roleplay the interaction with an AI partner who adapts to your approach and provides a real-time DEAR MAN scorecard. Over time, the Analysis dashboard will review your recent "at-bats" to identify patterns in your communication, highlighting your strengths and gently pointing out areas for improvement.`,
     link: "https://script.google.com/macros/s/AKfycbxTJxSijHyWlmXyRBCwtKRssaxQ3R6Ks7qcqHOvp3QNYeln8CZgJY1jdamwGEnOorbS/exec"
+  },
+  {
+    name: "ABC Cognitive Reframing",
+    icon: Activity,
+    description: "The ABC's of Thoughts, Feelings, & Actions tool is a cognitive reframing system designed to help you externalize and examine intense internal experiences. Simply log the 'Activating Event' to ground yourself in the facts of what happened, then document the 'Beliefs' or thoughts the situation triggered. After noting the emotional and behavioral 'Consequences', you can work with the system to develop a 'Reframe'—a more balanced or helpful perspective. This tool helps you build awareness of your cognitive patterns and empowers you to shift your outcome over time.",
+    type: 'internal',
+    action: () => window.dispatchEvent(new CustomEvent('open-abc-reframing'))
   }
 ];
 
-function ToolsLibraryView() {
+function ToolsLibraryView({ setActiveTab, onOpenABC }: { setActiveTab?: (tab: string) => void; onOpenABC?: () => void }) {
   const [expandedIndices, setExpandedIndices] = useState<number[]>([]);
 
   const toggleExpand = (index: number) => {
@@ -6821,7 +7369,10 @@ function ToolsLibraryView() {
           {text}
           {words.length > 30 && (
             <button 
-              onClick={() => toggleExpand(index)}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleExpand(index);
+              }}
               className="ml-1 text-brand-accent hover:text-brand-secondary font-medium focus:outline-none focus:ring-2 focus:ring-brand-accent rounded px-1"
             >
               less
@@ -6835,7 +7386,10 @@ function ToolsLibraryView() {
       <>
         {words.slice(0, 30).join(' ')}...
         <button 
-          onClick={() => toggleExpand(index)}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleExpand(index);
+          }}
           className="ml-1 text-brand-accent hover:text-brand-secondary font-medium focus:outline-none focus:ring-2 focus:ring-brand-accent rounded px-1"
         >
           more
@@ -6848,11 +7402,11 @@ function ToolsLibraryView() {
     <div className="space-y-8">
       <header>
         <h2 className="text-2xl font-bold text-white tracking-tight">Tools Library</h2>
-        <p className="text-slate-400 mt-1">Access useful Apps Script applications and tools.</p>
+        <p className="text-slate-400 mt-1">Access useful coaching applications and exercises.</p>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {TOOLS.map((tool, index) => (
+        {TOOLS.map((tool: any, index) => (
           <div key={index} className="bg-brand-surface border border-slate-800/50 p-6 rounded-2xl group hover:border-brand-accent/50 transition-all flex flex-col shadow-xl">
             <div className="w-12 h-12 bg-brand-accent/10 rounded-xl flex items-center justify-center text-brand-accent mb-4 border border-brand-accent/20">
               <tool.icon className="w-6 h-6" />
@@ -6861,14 +7415,31 @@ function ToolsLibraryView() {
             <div className="text-sm text-slate-400 mb-6 flex-1 leading-relaxed">
               {getTruncatedText(tool.description, index)}
             </div>
-            <a 
-              href={tool.link} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full py-3 bg-brand-focus text-white rounded-xl font-bold hover:bg-slate-800 transition-all group-hover:shadow-lg group-hover:shadow-brand-accent/10 border border-slate-700/50 focus:outline-none focus:ring-2 focus:ring-brand-accent"
-            >
-              Open Tool <ExternalLink className="w-4 h-4" />
-            </a>
+            
+            {tool.type === 'internal' ? (
+              <button 
+                onClick={() => {
+                  if (tool.tab) setActiveTab?.(tool.tab);
+                  if (tool.name === 'ABC Cognitive Reframing' && onOpenABC) {
+                    onOpenABC();
+                  } else if (tool.action) {
+                    tool.action();
+                  }
+                }}
+                className="flex items-center justify-center gap-2 w-full py-3 bg-brand-accent text-white rounded-xl font-bold hover:bg-brand-secondary transition-all group-hover:shadow-lg group-hover:shadow-brand-accent/10 border border-brand-accent/20 focus:outline-none focus:ring-2 focus:ring-brand-accent"
+              >
+                Open Tool <ArrowRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <a 
+                href={tool.link} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 w-full py-3 bg-brand-focus text-white rounded-xl font-bold hover:bg-slate-800 transition-all group-hover:shadow-lg group-hover:shadow-brand-accent/10 border border-slate-700/50 focus:outline-none focus:ring-2 focus:ring-brand-accent"
+              >
+                Open Tool <ExternalLink className="w-4 h-4" />
+              </a>
+            )}
           </div>
         ))}
       </div>

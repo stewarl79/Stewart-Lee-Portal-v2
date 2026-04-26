@@ -240,6 +240,22 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["clientUid", "coachUid", "goalTitle", "objectives", "status", "createdAt"]
+    },
+    "ABCReframing": {
+      "title": "ABC Reframing",
+      "description": "ABC's of Thoughts, Feelings, & Actions (Cognitive Reframing).",
+      "type": "object",
+      "properties": {
+        "clientUid": { "type": "string", "description": "Client's UID" },
+        "coachUid": { "type": "string", "description": "Coach's UID" },
+        "situation": { "type": "string", "description": "Activating Event / Situation" },
+        "thoughts": { "type": "string", "description": "Beliefs / Thoughts" },
+        "consequences": { "type": "string", "description": "Consequences (Feelings & Actions)" },
+        "reframe": { "type": "string", "description": "New Perspective / Reframe" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientUid", "coachUid", "situation", "thoughts", "consequences", "createdAt"]
     }
   },
   "firestore": {
@@ -302,6 +318,10 @@
     "/treatment_plans/{planId}": {
       "schema": "TreatmentPlan",
       "description": "Client treatment plans"
+    },
+    "/abc_reframing/{reframingId}": {
+      "schema": "ABCReframing",
+      "description": "Cognitive reframing logs"
     }
   }
 }
