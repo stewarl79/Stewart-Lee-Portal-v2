@@ -333,6 +333,55 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidEnergyReadiness(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'date', 'score', 'createdAt']) &&
+             hasOnlyAllowedFields(['userId', 'userEmail', 'date', 'score', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isValidEmail(data.userEmail) &&
+             data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.score is int && data.score >= 1 && data.score <= 10 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidEnergyTask(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'name', 'category', 'impactType', 'createdAt']) &&
+             hasOnlyAllowedFields(['userId', 'userEmail', 'name', 'category', 'impactType', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isValidEmail(data.userEmail) &&
+             data.name is string && data.name.size() < 200 &&
+             data.category in ["Sensory", "Social", "Cognitive", "Physical", "Uncategorized"] &&
+             data.impactType in ["Drain", "Deposit"] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidEnergyLog(data) {
+      return data.keys().hasAll(['userId', 'taskId', 'taskName', 'rating', 'category', 'impactType', 'createdAt']) &&
+             hasOnlyAllowedFields(['userId', 'taskId', 'taskName', 'rating', 'category', 'impactType', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.taskId is string &&
+             data.taskName is string && data.taskName.size() < 200 &&
+             data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+             data.category is string &&
+             data.impactType in ["Drain", "Deposit"] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidDearManLog(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'describe', 'express', 'assert', 'reinforce', 'mindfulnessGoal', 'mindfulnessDistractions', 'confidence', 'negotiate', 'createdAt']) &&
+             hasOnlyAllowedFields(['userId', 'userEmail', 'describe', 'express', 'assert', 'reinforce', 'mindfulnessGoal', 'mindfulnessDistractions', 'confidence', 'negotiate', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isValidEmail(data.userEmail) &&
+             data.describe is string && data.describe.size() < 5000 &&
+             data.express is string && data.express.size() < 5000 &&
+             data.assert is string && data.assert.size() < 5000 &&
+             data.reinforce is string && data.reinforce.size() < 5000 &&
+             data.mindfulnessGoal is string && data.mindfulnessGoal.size() < 5000 &&
+             data.mindfulnessDistractions is string && data.mindfulnessDistractions.size() < 5000 &&
+             data.confidence is string && data.confidence.size() < 5000 &&
+             data.negotiate is string && data.negotiate.size() < 5000 &&
+             data.createdAt is timestamp;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -467,6 +516,34 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
       allow create: if isAuthenticated() && isValidBrainDump(request.resource.data);
       allow update: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId) && isValidBrainDump(request.resource.data);
+      allow delete: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+    }
+
+    match /energy_readiness/{readinessId} {
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+      allow create: if isAuthenticated() && isValidEnergyReadiness(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.userId && isValidEnergyReadiness(request.resource.data);
+      allow delete: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+    }
+
+    match /energy_tasks/{taskId} {
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+      allow create: if isAuthenticated() && isValidEnergyTask(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.userId && isValidEnergyTask(request.resource.data);
+      allow delete: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+    }
+
+    match /energy_logs/{logId} {
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+      allow create: if isAuthenticated() && isValidEnergyLog(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.userId && isValidEnergyLog(request.resource.data);
+      allow delete: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+    }
+
+    match /dear_man_logs/{logId} {
+      allow read: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
+      allow create: if isAuthenticated() && isValidDearManLog(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.userId && isValidDearManLog(request.resource.data);
       allow delete: if isAuthenticated() && (isCoach() || request.auth.uid == resource.data.userId);
     }
   }

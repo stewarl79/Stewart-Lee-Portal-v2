@@ -269,6 +269,67 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation time" }
       },
       "required": ["userId", "userEmail", "text", "createdAt"]
+    },
+    "EnergyReadiness": {
+      "title": "Energy Readiness",
+      "description": "Daily morning readiness/capacity score.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string", "format": "email" },
+        "date": { "type": "string", "description": "Date in YYYY-MM-DD format" },
+        "score": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "date", "score", "createdAt"]
+    },
+    "EnergyTask": {
+      "title": "Energy Task",
+      "description": "A reusable energy-accountable task.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["Sensory", "Social", "Cognitive", "Physical", "Uncategorized"] },
+        "impactType": { "type": "string", "enum": ["Drain", "Deposit"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "name", "category", "impactType", "createdAt"]
+    },
+    "EnergyLog": {
+      "title": "Energy Log",
+      "description": "Execution log for an energy task.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "taskName": { "type": "string" },
+        "rating": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "category": { "type": "string" },
+        "impactType": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "taskId", "taskName", "rating", "category", "impactType", "createdAt"]
+    },
+    "DearManLog": {
+      "title": "DEAR MAN Log",
+      "description": "Log for practicing interpersonal effectiveness skills.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string", "format": "email" },
+        "describe": { "type": "string" },
+        "express": { "type": "string" },
+        "assert": { "type": "string" },
+        "reinforce": { "type": "string" },
+        "mindfulnessGoal": { "type": "string" },
+        "mindfulnessDistractions": { "type": "string" },
+        "confidence": { "type": "string" },
+        "negotiate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "describe", "express", "assert", "reinforce", "mindfulnessGoal", "mindfulnessDistractions", "confidence", "negotiate", "createdAt"]
     }
   },
   "firestore": {
@@ -339,6 +400,22 @@
     "/brain_dumps/{dumpId}": {
       "schema": "BrainDump",
       "description": "Raw brain dumps"
+    },
+    "/energy_readiness/{readinessId}": {
+      "schema": "EnergyReadiness",
+      "description": "Daily morning readiness"
+    },
+    "/energy_tasks/{taskId}": {
+      "schema": "EnergyTask",
+      "description": "Reusable energy tasks"
+    },
+    "/energy_logs/{logId}": {
+      "schema": "EnergyLog",
+      "description": "Task execution logs"
+    },
+    "/dear_man_logs/{logId}": {
+      "schema": "DearManLog",
+      "description": "DEAR MAN mastery logs"
     }
   }
 }

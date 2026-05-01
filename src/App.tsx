@@ -89,6 +89,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 import { ABCWorksheet } from './components/tools/ABCWorksheet';
 import { BrainDump } from './components/tools/BrainDump';
+import EnergyBalanceDashboard from './components/EnergyBalanceDashboard';
+import DearManMastery from './components/DearManMastery';
 
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
@@ -2817,7 +2819,10 @@ export default function App() {
   const handleGoogleLogin = React.useCallback(async () => {
     try {
       setAuthError('');
-      await signInWithPopup(auth, new GoogleAuthProvider());
+      const result = await signInWithPopup(auth, new GoogleAuthProvider());
+      if (result.user) {
+        setShowAuthModal(false);
+      }
     } catch (error: any) {
       console.error('Google Login Error:', error);
       setAuthError(error.message);
@@ -3250,6 +3255,7 @@ export default function App() {
           onRequestNotifications={requestNotificationPermission}
         />
       );
+      case 'dear-man': return <DearManMastery user={user} />;
       default: return null;
     }
   };
@@ -3329,28 +3335,6 @@ export default function App() {
             <SidebarItem icon={Zap} label="Getting Started" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
           )}
 
-          <div className="px-3 py-2">
-            <button 
-              onClick={() => {
-                const nextView = isToolsSite ? 'portal' : 'tools';
-                setForcedSiteView(nextView);
-                setActiveTab(nextView === 'tools' ? 'tools' : 'dashboard');
-              }}
-              className="w-full group flex items-center justify-between px-4 py-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all text-left"
-            >
-              <div className="flex items-center gap-3">
-                <div className="p-1.5 bg-indigo-500 rounded-lg text-white shadow-sm group-hover:scale-110 transition-transform">
-                  <RefreshCw className="w-4 h-4" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">Preview Mode</p>
-                  <p className="text-sm font-bold text-white tracking-tight">{isToolsSite ? 'Switch to Portal' : 'Switch to Tools'}</p>
-                </div>
-              </div>
-              <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform" />
-            </button>
-          </div>
-          
           {!isToolsSite && <SidebarItem icon={Calendar} label="Calendar" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />}
           
           {profile?.role === 'client' && clientReflectionTemplate?.isEnabled && !isToolsSite && (
@@ -3363,6 +3347,10 @@ export default function App() {
             />
           )}
           <SidebarItem icon={Wrench} label="Tools Library" active={activeTab === 'tools'} onClick={() => setActiveTab('tools')} />
+          
+          {user && (
+            <SidebarItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          )}
           
           {isToolsSite && (
             <SidebarItem icon={ShieldCheck} label="Privacy Vault" active={activeTab === 'privacy'} onClick={() => setActiveTab('privacy')} />
@@ -3566,29 +3554,6 @@ export default function App() {
                   <SidebarItem icon={Zap} label="Getting Started" active={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setSidebarOpen(false); }} />
                 )}
 
-                <div className="py-2">
-                  <button 
-                    onClick={() => {
-                      const nextView = isToolsSite ? 'portal' : 'tools';
-                      setForcedSiteView(nextView);
-                      setActiveTab(nextView === 'tools' ? 'tools' : 'dashboard');
-                      setSidebarOpen(false);
-                    }}
-                    className="w-full group flex items-center justify-between px-4 py-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all text-left"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-indigo-500 rounded-lg text-white shadow-sm group-hover:scale-110 transition-transform">
-                        <RefreshCw className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">Preview Mode</p>
-                        <p className="text-sm font-bold text-white tracking-tight">{isToolsSite ? 'Switch to Portal' : 'Switch to Tools'}</p>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform" />
-                  </button>
-                </div>
-
                 {!isToolsSite && <SidebarItem icon={Calendar} label="Calendar" active={activeTab === 'calendar'} onClick={() => { setActiveTab('calendar'); setSidebarOpen(false); }} />}
                 
                 {profile?.role === 'client' && clientReflectionTemplate?.isEnabled && !isToolsSite && (
@@ -3602,6 +3567,10 @@ export default function App() {
                 )}
                 
                 <SidebarItem icon={Wrench} label="Tools Library" active={activeTab === 'tools'} onClick={() => { setActiveTab('tools'); setSidebarOpen(false); }} />
+                
+                {user && (
+                  <SidebarItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => { setActiveTab('settings'); setSidebarOpen(false); }} />
+                )}
                 
                 {isToolsSite && (
                   <SidebarItem icon={ShieldCheck} label="Privacy Vault" active={activeTab === 'privacy'} onClick={() => { setActiveTab('privacy'); setSidebarOpen(false); }} />
@@ -4777,18 +4746,18 @@ const PrivacyVaultView = () => (
           <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-500 mb-4">
             <ShieldCheck className="w-6 h-6" />
           </div>
-          <h3 className="text-lg font-bold text-white mb-2">I build the tools, I don't read your data.</h3>
+          <h3 className="text-lg font-bold text-white mb-2">Secure & Private by Design</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
-            I built this system to empower your brain, not to track it. While "Advanced" tools sync to the database so you can access them across devices, I do not monitor individual data logs for non-clients.
+            I built this system to empower your brain, not to track it. This is why it requires you to be securely signed in so your data stays secure and private as well as allowing some of the functionality to work correctly by emailing you summaries or other data depending on the app.
           </p>
         </div>
         <div className="p-6 bg-brand-surface border border-slate-800 rounded-2xl">
           <div className="w-10 h-10 bg-blue-500/10 rounded-xl flex items-center justify-center text-blue-500 mb-4">
-            <LogOut className="w-6 h-6" />
+            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-widest border border-slate-700">Basic Tool</span>
           </div>
-          <h3 className="text-lg font-bold text-white mb-2">Pure Client-Side Option</h3>
+          <h3 className="text-lg font-bold text-white mb-2">Basic vs Advanced Tools</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
-            "Basic" tools do not send any data to my servers. Everything stays in your browser session and is cleared when you close the tab.
+            "Basic" tools do not send any data to my servers. Everything stays in your browser session. "Advanced" tools require sign-in to securely store your data and enable AI features.
           </p>
         </div>
       </div>
@@ -7761,37 +7730,43 @@ const TOOLS = [
     name: "Energy Balance Dashboard",
     icon: Zap,
     description: "The Energy Balance Dashboard is a low-friction tool designed to help you visualize your daily capacity and prevent burnout using the principles of Energy Accounting. Simply log your morning readiness using the quick slider, then tap to rate your daily activities as either energy 'drains' or restorative 'deposits'. The dashboard automatically graphs your trends so you can easily see what depletes your battery, proactively plan your recovery time, and export a one-click summary for our coaching sessions.",
-    link: "https://script.google.com/macros/s/AKfycbw0DA96tNM30wiDZu0Q2iI0vXB7a0Bw2-IHi1Dz4v_HcMHGJ2Qbm0fgx9IJvYeVXtJk4A/exec"
+    type: 'internal',
+    category: 'advanced'
   },
   {
     name: "Task Deconstructor",
     icon: Layers,
     description: "The Task Deconstructor is a low-friction tool designed to help you bypass executive dysfunction and overcome the paralysis of getting started. Simply type in an overwhelming task and click 'Deconstruct For Me' to let the app automatically break your goal into microscopic, highly specific actions. Once you begin, the tool activates Tunnel Vision by hiding the overarching list and displaying only one single step on the screen at a time. Just focus on the action in front of you, click the 'Done' button when finished, and seamlessly build momentum until the entire project is cleared.",
-    link: "https://script.google.com/macros/s/AKfycbEusYxAKmAgSl3vs-LDPOS90HJ6wJygggfPDoi6eK4iyqKrZgdEpBAU5Y3NAQPWu8xtw/exec"
+    link: "https://script.google.com/macros/s/AKfycbEusYxAKmAgSl3vs-LDPOS90HJ6wJygggfPDoi6eK4iyqKrZgdEpBAU5Y3NAQPWu8xtw/exec",
+    category: 'basic'
   },
   {
     name: "Time-Blindness Visualizer",
     icon: Hourglass,
     description: `The Time-Blindness Visualizer is a sensory-friendly pacing tool designed to replace anxiety-inducing numerical countdowns with a low-demand visual representation of time. Simply select or type in your desired duration, and the screen will display five green energy blocks that gently drain in halves as time passes, allowing you to gauge your remaining "time volume" at a quick glance without doing mental math. When your session is complete, a soft, harmonic singing bowl chime provides a gentle cue to transition, allowing you to easily reset for your next focused chunk of work. This tool is built specifically to protect your working memory and help you pace your energy without triggering demand avoidance.`,
-    link: "https://script.google.com/macros/s/AKfycbypm9TIR_t_CFcF_3CKUOD8hWsGAb_4TH0T9X8mwGvgXnxsU1C9hdUqC6HXxhwrTfYv/exec"
+    link: "https://script.google.com/macros/s/AKfycbypm9TIR_t_CFcF_3CKUOD8hWsGAb_4TH0T9X8mwGvgXnxsU1C9hdUqC6HXxhwrTfYv/exec",
+    category: 'basic'
   },
   {
     name: "Frictionless Brain Dump",
     icon: BrainCircuit,
     description: `The Frictionless Brain Dump is designed to help you instantly externalize your working memory without the executive function tax of organizing your thoughts on the spot. Whether you have a sudden idea, a looming task, or simply need to process an emotion, just type or dictate your raw thoughts into the single text box and hit save. Every evening at 5:00 PM, the system automatically reviews your raw notes, sorts them into Tasks, Ideas, and Emotional Check-ins, and delivers a clean, organized digest straight to your inbox.`,
-    type: 'internal'
+    type: 'internal',
+    category: 'advanced'
   },
   {
     name: "Dear Man Batting Cage",
     icon: MessageSquare,
     description: `The DEAR MAN Batting Cage is a safe, zero-pressure environment to practice the Dialectical Behavior Therapy (DBT) framework for effective communication. To build your skills, start by logging past or upcoming interpersonal challenges in the Tracker tab to isolate the facts from your emotional responses. When you are ready to test a scenario, switch to the Practice tab to roleplay the interaction with an AI partner who adapts to your approach and provides a real-time DEAR MAN scorecard. Over time, the Analysis dashboard will review your recent "at-bats" to identify patterns in your communication, highlighting your strengths and gently pointing out areas for improvement.`,
-    link: "https://script.google.com/macros/s/AKfycbxTJxSijHyWlmXyRBCwtKRssaxQ3R6Ks7qcqHOvp3QNYeln8CZgJY1jdamwGEnOorbS/exec"
+    type: 'internal',
+    category: 'advanced'
   },
   {
     name: "ABC Cognitive Reframing",
     icon: Activity,
     description: "The ABC's of Thoughts, Feelings, & Actions tool is a cognitive reframing system designed to help you externalize and examine intense internal experiences. Simply log the 'Activating Event' to ground yourself in the facts of what happened, then document the 'Beliefs' or thoughts the situation triggered. After noting the emotional and behavioral 'Consequences', you can work with the system to develop a 'Reframe'—a more balanced or helpful perspective. This tool helps you build awareness of your cognitive patterns and empowers you to shift your outcome over time.",
-    type: 'internal'
+    type: 'internal',
+    category: 'advanced'
   }
 ];
 
@@ -7852,7 +7827,18 @@ function ToolsLibraryView({ user, setActiveTab, onOpenABC, onOpenBrainDump, onOp
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {TOOLS.map((tool: any, index) => (
-          <div key={index} className="bg-brand-surface border border-slate-800/50 p-6 rounded-2xl group hover:border-brand-accent/50 transition-all flex flex-col shadow-xl">
+          <div key={index} className="bg-brand-surface border border-slate-800/50 p-6 rounded-2xl group hover:border-brand-accent/50 transition-all flex flex-col shadow-xl relative overflow-hidden">
+            <div className="absolute top-4 right-4">
+              <span className={cn(
+                "px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border",
+                tool.category === 'advanced' 
+                  ? "bg-brand-accent/10 border-brand-accent/30 text-brand-accent" 
+                  : "bg-slate-800 border-slate-700 text-slate-400"
+              )}>
+                {tool.category === 'advanced' ? 'Advanced Tool' : 'Basic Tool'}
+              </span>
+            </div>
+
             <div className="w-12 h-12 bg-brand-accent/10 rounded-xl flex items-center justify-center text-brand-accent mb-4 border border-brand-accent/20">
               <tool.icon className="w-6 h-6" />
             </div>
@@ -7864,7 +7850,7 @@ function ToolsLibraryView({ user, setActiveTab, onOpenABC, onOpenBrainDump, onOp
             {tool.type === 'internal' ? (
               <button 
                 onClick={() => {
-                  if (tool.name === 'Frictionless Brain Dump' || tool.name === 'ABC Cognitive Reframing') {
+                  if (tool.name === 'Frictionless Brain Dump' || tool.name === 'ABC Cognitive Reframing' || tool.name === 'Energy Balance Dashboard' || tool.name === 'Dear Man Batting Cage') {
                     if (!user) {
                       onOpenAuth?.();
                     } else {
@@ -7873,6 +7859,12 @@ function ToolsLibraryView({ user, setActiveTab, onOpenABC, onOpenBrainDump, onOp
                         if (onOpenABC) onOpenABC();
                         else if (onOpenTool) onOpenTool('ABC Cognitive Reframing', 'basic', <ABCWorksheet isPrivate={true} onSave={() => {}} />);
                       }
+                      if (tool.name === 'Energy Balance Dashboard') {
+                        onOpenTool?.('Energy Balance Dashboard', 'advanced', <EnergyBalanceDashboard user={user} />);
+                      }
+                      if (tool.name === 'Dear Man Batting Cage') {
+                        onOpenTool?.('Dear Man Batting Cage', 'advanced', <DearManMastery user={user} />);
+                      }
                     }
                   } else if (tool.tab) {
                     setActiveTab?.(tool.tab);
@@ -7880,9 +7872,9 @@ function ToolsLibraryView({ user, setActiveTab, onOpenABC, onOpenBrainDump, onOp
                     tool.action();
                   }
                 }}
-                className="flex items-center justify-center gap-2 w-full py-3 bg-brand-accent text-white rounded-xl font-bold hover:bg-brand-secondary transition-all group-hover:shadow-lg group-hover:shadow-brand-accent/10 border border-brand-accent/20 focus:outline-none focus:ring-2 focus:ring-brand-accent"
+                className="flex items-center justify-center gap-2 w-full py-3 bg-brand-accent text-white rounded-xl font-bold hover:bg-brand-secondary transition-all group-hover:shadow-lg group-hover:shadow-brand-accent/10 border border-brand-accent/20 focus:outline-none focus:ring-2 focus:ring-brand-accent text-sm"
               >
-                {(tool.name === 'Frictionless Brain Dump' || tool.name === 'ABC Cognitive Reframing') && !user ? 'Please Sign in to Use' : 'Open Tool'} <ArrowRight className="w-4 h-4" />
+                {(tool.name === 'Frictionless Brain Dump' || tool.name === 'ABC Cognitive Reframing' || tool.description.includes('Sign in')) && !user ? 'Please Sign in to Use' : 'Open Tool'} <ArrowRight className="w-4 h-4" />
               </button>
             ) : (
               <a 
