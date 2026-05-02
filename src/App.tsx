@@ -3404,6 +3404,15 @@ export default function App() {
                 Visit Website
                 <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
               </a>
+              <a 
+                href="https://mrleeteaches.com/privacypolicy/" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center justify-between py-1 text-slate-500 hover:text-white transition-colors text-[10px] font-medium"
+              >
+                Privacy & Terms
+                <ExternalLink className="w-2.5 h-2.5 opacity-50" />
+              </a>
             </div>
           )}
 
@@ -3623,6 +3632,15 @@ export default function App() {
                     >
                       Visit Website
                       <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
+                    </a>
+                    <a 
+                      href="https://mrleeteaches.com/privacypolicy/" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-between py-1 text-slate-500 hover:text-white transition-colors text-[10px] font-medium"
+                    >
+                      Privacy & Terms
+                      <ExternalLink className="w-2.5 h-2.5 opacity-50" />
                     </a>
                   </div>
                 )}
@@ -4753,7 +4771,7 @@ const PrivacyVaultView = () => (
         </div>
         <div className="p-6 bg-brand-surface border border-slate-800 rounded-2xl">
           <div className="w-10 h-10 bg-blue-500/10 rounded-xl flex items-center justify-center text-blue-500 mb-4">
-            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-widest border border-slate-700">Basic Tool</span>
+            <Wrench className="w-6 h-6" />
           </div>
           <h3 className="text-lg font-bold text-white mb-2">Basic vs Advanced Tools</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
@@ -4778,7 +4796,7 @@ const PrivacyVaultView = () => (
           </div>
           <h3 className="text-lg font-bold text-white mb-2">Right to Erasure</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
-            You can delete your accounts or specific data points at any time. When you click delete, it is gone from the primary database instantly.
+            You can delete your accounts or specific data points at any time. When you click delete, it is gone from the primary database instantly and permanently. Before you delete your account, be sure that you don't want any of the information because there is no way to retrieve it after deletion.
           </p>
         </div>
       </div>
@@ -7737,7 +7755,7 @@ const TOOLS = [
     name: "Task Deconstructor",
     icon: Layers,
     description: "The Task Deconstructor is a low-friction tool designed to help you bypass executive dysfunction and overcome the paralysis of getting started. Simply type in an overwhelming task and click 'Deconstruct For Me' to let the app automatically break your goal into microscopic, highly specific actions. Once you begin, the tool activates Tunnel Vision by hiding the overarching list and displaying only one single step on the screen at a time. Just focus on the action in front of you, click the 'Done' button when finished, and seamlessly build momentum until the entire project is cleared.",
-    link: "https://script.google.com/macros/s/AKfycbEusYxAKmAgSl3vs-LDPOS90HJ6wJygggfPDoi6eK4iyqKrZgdEpBAU5Y3NAQPWu8xtw/exec",
+    link: "https://script.google.com/macros/s/AKfycbwEusYxAKmAgSl3vs-LDPOS90HJ6wJygggfPDoi6eK4iyqKrZgdEpBAU5Y3NAQPWu8xtw/exec",
     category: 'basic'
   },
   {
